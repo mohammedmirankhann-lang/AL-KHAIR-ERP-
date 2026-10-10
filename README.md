@@ -9,7 +9,7 @@ Owner-run school ERP for Al Khair Academy, Indore (MP board, Nursery to 8th).
 - **Database history:** every schema change is in `supabase/migrations/` in order (1 to 11).
 
 ## What it does today
-Students, fees and receipts, documents checklist (PEN, APAAR, Aadhaar, Samagra), accounts (double entry, P&L, balance sheet), trends, staff and geofence attendance, payroll (calculation, holdback, HDFC bulk file, posting to books), academics (PT1, Term 1, PT2, Term 2 marks and results), reminders (fees and documents, WhatsApp links), backup to Excel.
+Students, fees and receipts, documents checklist (PEN, APAAR, Aadhaar, Samagra), accounts (double entry, P&L, balance sheet), trends, staff and geofence attendance, payroll (calculation, holdback, HDFC bulk file, posting to books), academics (PT1, Term 1, PT2, Term 2 marks and results, student attendance, progress tracking), teacher logins (class teacher attendance and subject marks entry, scoped to the teacher's own assignments), reminders (fees and documents, WhatsApp links), backup to Excel.
 
 ## Rules built in
 - Fees: 70% tuition, remaining 30% split equally into Exam, Activity, Computer.
@@ -29,5 +29,8 @@ Students, fees and receipts, documents checklist (PEN, APAAR, Aadhaar, Samagra),
 - Move to Supabase Pro.
 - Optional: own web address (for example erp.alkhairacademy.in) in Vercel project settings > Domains.
 
+## Teacher access
+The owner assigns each teacher in Academics > Setup (class teacher, or subject teacher for a class) and creates the login in Staff > Staff list. Teachers never read tables directly: they use database functions that check their own assignments. Marks are locked when a teacher submits; only the owner can unlock (Academics > Progress).
+
 ## Not built yet
-Teacher logins with class assignment, student attendance, report cards, grades, AI summaries, WhatsApp sending through the official API.
+Report cards, grades, AI summaries, WhatsApp sending through the official API.

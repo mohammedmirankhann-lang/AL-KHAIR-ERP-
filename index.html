@@ -380,7 +380,7 @@ async function route(){
   if(!S.user)return;
   const r=currentRoute(),view=$('#view');
   if(S.user.user_metadata&&S.user.user_metadata.temp_password){$('#nav').innerHTML='';await vSetPassword(view);return}
-  if(S.profile&&S.profile.role==='teacher'){$('#nav').innerHTML='<a href="#/me" aria-current="page">My attendance</a>';view.innerHTML='<p class="muted">Loading…</p>';try{await vMyAttendance(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
+  if(S.profile&&S.profile.role==='teacher'){const tn=[['me','My attendance'],['attendance','Class attendance'],['marks','Marks']],tr=(r.name==='dashboard'?'me':r.name);$('#nav').innerHTML=tn.map(n=>'<a href="#/'+n[0]+'"'+(tr===n[0]?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');view.innerHTML='<p class="muted">Loading…</p>';const tf={attendance:vTAttendance,marks:vTMarks}[tr]||vMyAttendance;try{await tf(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
   $('#nav').innerHTML=NAV.map(n=>'<a href="#/'+n[0]+'"'+((r.name===n[0]||(r.name==='student'&&n[0]==='students'))?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');
   const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,olddues:vOldDues,fees:vFees,accounts:vAccounts,trends:vTrends,import:vImport}[r.name]||vDashboard;
   view.innerHTML='<p class="muted">Loading…</p>';
@@ -911,6 +911,87 @@ async function vOldDues(el){
     formModal('Choose the current student: '+r.student_name,sel('sid','Student',[['','— none, not in school —']].concat(cand.map(x=>[x.id,x.full_name+' · '+(clsOf[x.id]||'no enrolment')+' · adm '+x.admission_no+' · '+(x.father_name||'')])),r.student_id||''),'Save',async fd=>{const v=fd.get('sid');await done(r.id,{student_id:v||null,status:v?'linked':'open'},v?'Linked':'Link removed');closeModal()},{})});
 }
 
+/* ---------- Owner views of what teachers enter: class attendance and marks progress ---------- */
+let acDate=today();
+async function acAttendance(box,B){
+  const [en,at,asg,stf]=await Promise.all([
+    all((a,b)=>sb.from('enrollments').select('id,class_id,roll_no,students(full_name,admission_no)').eq('academic_year_id',S.year.id).range(a,b)),
+    q(sb.from('student_attendance').select('enrollment_id,status,marked_by,updated_at').eq('att_date',acDate)),
+    q(sb.from('teacher_assignments').select('class_id,staff_id').eq('is_class_teacher',true)),
+    q(sb.from('staff').select('id,full_name'))]);
+  const sNm=Object.fromEntries(stf.map(x=>[x.id,x.full_name])),by=Object.fromEntries(at.map(a=>[a.enrollment_id,a]));
+  const rows=S.classes.map(c=>{const es=en.filter(e=>e.class_id===c.id),m=es.filter(e=>by[e.id]),cnt=k=>m.filter(e=>by[e.id].status===k).length;return{c,es,n:es.length,m:m.length,p:cnt('present'),a:cnt('absent'),l:cnt('late'),v:cnt('leave'),ct:asg.filter(x=>x.class_id===c.id).map(x=>sNm[x.staff_id]).filter(Boolean).join(', ')}});
+  const tot=k=>sum(rows.map(r=>r[k]));
+  box.innerHTML='<div class="row2" style="align-items:end">'+inp('acD','Date',acDate,'date','max="'+today()+'"')+'</div>'+
+   '<div class="kpis" style="margin-top:12px">'+kpi('Present',String(tot('p')+tot('l')),'including late')+kpi('Absent',String(tot('a')),'on '+fmtDate(acDate))+kpi('On leave',String(tot('v')),'')+kpi('Classes marked',rows.filter(r=>r.m).length+' of '+rows.filter(r=>r.n).length,'attendance not yet marked: '+rows.filter(r=>r.n&&!r.m).map(r=>r.c.name).join(', '))+'</div>'+
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Classes on '+fmtDate(acDate)+'</h2></div><div class="tablewrap"><table><thead><tr><th>Class</th><th>Class teacher</th><th class="r">Students</th><th class="r">Present</th><th class="r">Late</th><th class="r">Absent</th><th class="r">Leave</th><th>Status</th></tr></thead><tbody>'+
+   rows.filter(r=>r.n).map(r=>'<tr class="click" data-cl="'+r.c.id+'"'+(r.c.id===acSel.cls?' style="background:var(--surface2)"':'')+'><td>'+esc(r.c.name)+'</td><td>'+(esc(r.ct)||'<span class="muted small">not assigned</span>')+'</td><td class="r">'+r.n+'</td><td class="r">'+r.p+'</td><td class="r">'+r.l+'</td><td class="r"><b>'+r.a+'</b></td><td class="r">'+r.v+'</td><td>'+(r.m===0?'<span class="pill neutral">Not marked</span>':r.m<r.n?'<span class="pill warn">Partly ('+r.m+'/'+r.n+')</span>':'<span class="pill good">Marked</span>')+'</td></tr>').join('')+'</tbody></table></div></div>'+
+   (function(){const r=rows.find(x=>x.c.id===acSel.cls);if(!r||!r.n)return'';return'<div class="card" style="margin-top:12px"><div class="card-head"><h2>'+esc(r.c.name)+' · students</h2></div><div class="tablewrap"><table><thead><tr><th>Roll</th><th>Name</th><th>Status</th></tr></thead><tbody>'+r.es.slice().sort((a,b)=>(a.roll_no||999)-(b.roll_no||999)||a.students.full_name.localeCompare(b.students.full_name)).map(e=>{const a=by[e.id];return'<tr><td>'+(e.roll_no||'')+'</td><td>'+esc(e.students.full_name)+'</td><td>'+(a?'<span class="pill '+(a.status==='absent'?'bad':a.status==='present'?'good':'warn')+'">'+esc(a.status)+'</span>':'<span class="muted small">not marked</span>')+'</td></tr>'}).join('')+'</tbody></table></div></div>'})();
+  $('#acD').onchange=e=>{acDate=e.target.value||today();vAcademics($('#view'))};
+  $$('[data-cl]').forEach(r=>r.onclick=()=>{acSel.cls=r.dataset.cl;vAcademics($('#view'))});
+}
+async function acProgress(box,B){
+  const ex=B.exams.find(e=>e.id===acSel.exam)||B.exams[0];
+  if(!ex){box.innerHTML='<p class="muted">No exams set up.</p>';return}
+  const [en,mk,sub,asg,stf]=await Promise.all([
+    all((a,b)=>sb.from('enrollments').select('id,class_id').eq('academic_year_id',S.year.id).range(a,b)),
+    all((a,b)=>sb.from('marks').select('enrollment_id,subject_id,entered_by,updated_at').eq('exam_id',ex.id).range(a,b)),
+    q(sb.from('marks_submissions').select('*').eq('exam_id',ex.id)),
+    q(sb.from('teacher_assignments').select('class_id,subject_id,staff_id').not('subject_id','is',null)),
+    q(sb.from('staff').select('id,full_name'))]);
+  const sNm=Object.fromEntries(stf.map(x=>[x.id,x.full_name])),clsOf=Object.fromEntries(en.map(e=>[e.id,e.class_id]));
+  const cnt={};mk.forEach(m=>{const k=clsOf[m.enrollment_id]+'|'+m.subject_id;cnt[k]=(cnt[k]||0)+1});
+  const size={};en.forEach(e=>{size[e.class_id]=(size[e.class_id]||0)+1});
+  const subOf=Object.fromEntries(sub.map(x=>[x.class_id+'|'+x.subject_id,x]));
+  const lines=[];S.classes.forEach(c=>{if(!size[c.id])return;B.subjOf(c.id).forEach(sj=>{const k=c.id+'|'+sj.id;lines.push({c,sj,k,n:size[c.id],e:cnt[k]||0,sub:subOf[k],t:asg.filter(a=>a.class_id===c.id&&a.subject_id===sj.id).map(a=>sNm[a.staff_id]).filter(Boolean).join(', ')})})});
+  const done=lines.filter(l=>l.sub).length;
+  box.innerHTML='<div class="row2" style="align-items:end">'+sel('acE','Exam',B.exams.map(e=>[e.id,e.name]),ex.id)+'</div><div class="kpis" style="margin-top:12px">'+kpi('Submitted',done+' of '+lines.length,'class-subjects for '+ex.short_name)+kpi('In progress',String(lines.filter(l=>!l.sub&&l.e).length),'marks entered, not submitted')+kpi('Not started',String(lines.filter(l=>!l.e).length),'')+'</div>'+
+   '<div class="card" style="margin-top:12px"><div class="tablewrap"><table><thead><tr><th>Class</th><th>Subject</th><th>Teacher</th><th class="r">Entered</th><th>Status</th><th></th></tr></thead><tbody>'+
+   lines.map(l=>'<tr><td class="nowrap">'+esc(l.c.name)+'</td><td>'+esc(l.sj.name)+'</td><td>'+(esc(l.t)||'<span class="muted small">not assigned</span>')+'</td><td class="r">'+l.e+' / '+l.n+'</td><td>'+(l.sub?'<span class="pill good">Submitted '+fmtDate(l.sub.submitted_at)+'</span>':l.e?'<span class="pill warn">In progress</span>':'<span class="pill neutral">Not started</span>')+'</td><td class="r">'+(l.sub?'<button class="btn ghost sm" data-un="'+l.c.id+'|'+l.sj.id+'">Unlock</button>':'')+'</td></tr>').join('')+'</tbody></table></div></div>';
+  $('#acE').onchange=e=>{acSel.exam=e.target.value;vAcademics($('#view'))};
+  $$('[data-un]').forEach(b=>b.onclick=async()=>{const [c,j]=b.dataset.un.split('|');try{await q(sb.from('marks_submissions').delete().eq('exam_id',ex.id).eq('class_id',c).eq('subject_id',j));toast('Unlocked. The teacher can edit again.');vAcademics($('#view'))}catch(e){toast(errMsg(e),true)}});
+}
+
+/* ---------- Teacher screens: class attendance and marks (data goes to the same tables the owner sees) ---------- */
+let tAtt={cls:'',date:''},tM={key:'',exam:''};
+const dayShift=(d,k)=>{const x=new Date(d+'T00:00:00');x.setDate(x.getDate()+k);return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0')};
+async function vTAttendance(el){
+  const cts=(await rpc('teacher_my_assignments')).filter(a=>a.is_class_teacher);
+  if(!cts.length){el.innerHTML=head('Class attendance')+'<div class="card empty">You are not assigned as a class teacher yet. Ask the principal to assign your class.</div>';return}
+  if(!cts.find(a=>a.class_id===tAtt.cls))tAtt.cls=cts[0].class_id;
+  if(!tAtt.date)tAtt.date=today();
+  const [roster,rows]=await Promise.all([rpc('teacher_roster',{p_class:tAtt.cls}),rpc('teacher_get_attendance',{p_class:tAtt.cls,p_date:tAtt.date})]);
+  const by=Object.fromEntries(rows.map(r=>[r.enrollment_id,r.status])),OPT=[['present','Present'],['absent','Absent'],['late','Late'],['leave','Leave']];
+  el.innerHTML=head('Class attendance',rows.length?'Saved for '+fmtDate(tAtt.date):'Not marked yet for '+fmtDate(tAtt.date))+
+   '<div class="card"><div class="row2" style="align-items:end">'+(cts.length>1?sel('tc','Class',cts.map(a=>[a.class_id,a.class_name]),tAtt.cls):'<div><b>'+esc(cts[0].class_name)+'</b></div>')+inp('td','Date',tAtt.date,'date','min="'+dayShift(today(),-7)+'" max="'+today()+'"')+'</div>'+
+   '<div class="toolbar" style="margin:10px 0"><button class="btn ghost sm" id="tAll">Mark all present</button></div>'+
+   '<div class="tablewrap"><table><thead><tr><th>Roll</th><th>Name</th><th>Status</th></tr></thead><tbody>'+roster.map(r=>{const v=by[r.enrollment_id]||'present';return'<tr><td>'+(r.roll_no||'')+'</td><td>'+esc(r.full_name)+'</td><td class="nowrap">'+OPT.map(o=>'<label style="margin-right:10px"><input type="radio" name="s_'+r.enrollment_id+'" value="'+o[0]+'"'+(v===o[0]?' checked':'')+'> '+o[1]+'</label>').join('')+'</td></tr>'}).join('')+'</tbody></table></div><div style="margin-top:12px"><button class="btn" id="tSave">Save attendance</button></div></div>';
+  if($('#tc'))$('#tc').onchange=e=>{tAtt.cls=e.target.value;vTAttendance(el)};
+  $('#td').onchange=e=>{tAtt.date=e.target.value||today();vTAttendance(el)};
+  $('#tAll').onclick=()=>$$('input[type=radio][value=present]').forEach(i=>i.checked=true);
+  $('#tSave').onclick=async()=>{try{const out=roster.map(r=>{const c=document.querySelector('input[name="s_'+r.enrollment_id+'"]:checked');return{enrollment_id:r.enrollment_id,status:c?c.value:'present'}});const n=await rpc('teacher_save_attendance',{p_class:tAtt.cls,p_date:tAtt.date,p_rows:out});toast('Attendance saved for '+n+' students');vTAttendance(el)}catch(e){toast(errMsg(e),true)}};
+}
+async function vTMarks(el){
+  const as=(await rpc('teacher_my_assignments')).filter(a=>a.subject_id),exams=await rpc('teacher_exams');
+  if(!as.length){el.innerHTML=head('Marks')+'<div class="card empty">You are not assigned to any class subject yet. Ask the principal to assign you.</div>';return}
+  const kf=a=>a.class_id+'|'+a.subject_id;if(!as.find(a=>kf(a)===tM.key))tM.key=kf(as[0]);
+  if(!exams.find(e=>e.id===tM.exam))tM.exam=exams[0]&&exams[0].id;
+  const [cid,sid]=tM.key.split('|'),ex=exams.find(e=>e.id===tM.exam);
+  const [roster,st]=await Promise.all([rpc('teacher_roster',{p_class:cid}),rpc('teacher_get_marks',{p_exam:tM.exam,p_class:cid,p_subject:sid})]);
+  const by=Object.fromEntries(st.rows.map(r=>[r.enrollment_id,r])),max0=st.rows.length?st.rows[0].max_marks:ex.default_max,lock=st.submitted;
+  el.innerHTML=head('Marks',lock?'Submitted. Only the principal can unlock it.':'Enter marks, save, and submit when complete')+
+   '<div class="card"><div class="row2" style="align-items:end">'+sel('tk','Class and subject',as.map(a=>[kf(a),a.class_name+' · '+a.subject_name]),tM.key)+sel('te','Exam',exams.map(e=>[e.id,e.name]),tM.exam)+'</div>'+
+   '<div style="margin:10px 0"><label class="small">Max marks <input class="input" id="tMax" type="number" min="1" step="0.5" value="'+max0+'" style="width:90px;display:inline-block"'+(lock?' disabled':'')+'></label></div>'+
+   '<div class="tablewrap"><table><thead><tr><th>Roll</th><th>Name</th><th>Marks</th><th>Absent</th></tr></thead><tbody>'+roster.map(r=>{const m=by[r.enrollment_id];return'<tr><td>'+(r.roll_no||'')+'</td><td>'+esc(r.full_name)+'</td><td><input class="input tm" data-e="'+r.enrollment_id+'" type="number" min="0" step="0.5" value="'+(m&&m.marks!=null?m.marks:'')+'" style="width:90px"'+(lock?' disabled':'')+'></td><td><input type="checkbox" class="ta" data-e="'+r.enrollment_id+'"'+(m&&m.absent?' checked':'')+(lock?' disabled':'')+'></td></tr>'}).join('')+'</tbody></table></div>'+
+   (lock?'':'<div class="toolbar" style="margin-top:12px"><button class="btn" id="tSaveM">Save marks</button><button class="btn ghost" id="tSubM">Submit to principal</button></div>')+'</div>';
+  $('#tk').onchange=e=>{tM.key=e.target.value;vTMarks(el)};$('#te').onchange=e=>{tM.exam=e.target.value;vTMarks(el)};
+  const collect=()=>{const max=Number($('#tMax').value);if(!(max>0))throw new Error('Enter the maximum marks');const out=[];$$('.tm').forEach(i=>{const a=$('.ta[data-e="'+i.dataset.e+'"]').checked,v=i.value.trim();if(v===''&&!a)return;if(!a&&Number(v)>max)throw new Error('Marks are above the maximum: '+i.closest('tr').children[1].textContent);out.push({enrollment_id:i.dataset.e,marks:a?null:v,absent:a})});return{max,out}};
+  if(!lock){
+    $('#tSaveM').onclick=async()=>{try{const c=collect();if(!c.out.length)throw new Error('No marks entered');const n=await rpc('teacher_save_marks',{p_exam:tM.exam,p_class:cid,p_subject:sid,p_max:c.max,p_rows:c.out});toast('Marks saved for '+n+' students');vTMarks(el)}catch(e){toast(errMsg(e),true)}};
+    $('#tSubM').onclick=async()=>{try{const c=collect();if(c.out.length<roster.length&&!confirm('Marks are entered for '+c.out.length+' of '+roster.length+' students. Submit anyway? You will not be able to edit after submitting.'))return;if(c.out.length===roster.length&&!confirm('Submit these marks? You will not be able to edit them after this.'))return;await rpc('teacher_save_marks',{p_exam:tM.exam,p_class:cid,p_subject:sid,p_max:c.max,p_rows:c.out});await rpc('teacher_submit_marks',{p_exam:tM.exam,p_class:cid,p_subject:sid});toast('Marks submitted');vTMarks(el)}catch(e){toast(errMsg(e),true)}};
+  }
+}
+
 /* ---------- Reminders: fee and document messages (WhatsApp links, no API needed) ---------- */
 let remTab='fees',remCls='all',remMin=1;
 const REM_FEES="Assalamu Alaikum {parent},\nThis is a gentle reminder from Al-Khair Academy that the fee of Rs {due} for {student} (Class {class}) is pending. Please deposit it at your earliest convenience. Thank you.\n- Al-Khair Academy";
@@ -957,10 +1038,10 @@ async function vAcademics(el){
   if(!acSel.cls)acSel.cls=S.classes[0].id;
   if(!acSel.exam&&B.exams[0])acSel.exam=B.exams[0].id;
   el.innerHTML=head('Academics','Session '+S.year.label+' · '+B.exams.map(e=>e.short_name).join(', '))+
-   '<div class="seg" role="group" style="justify-self:start">'+[['marks','Enter marks'],['res','Results'],['set','Setup']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(acTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="abody" style="margin-top:14px;min-width:0"></div>';
+   '<div class="seg" role="group" style="justify-self:start">'+[['marks','Enter marks'],['res','Results'],['att','Attendance'],['prog','Progress'],['set','Setup']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(acTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="abody" style="margin-top:14px;min-width:0"></div>';
   $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{acTab=b.dataset.t;vAcademics(el)});
   const box=$('#abody');
-  try{if(acTab==='marks')await acMarks(box,B);else if(acTab==='res')await acResults(box,B);else acSetup(box,B)}catch(e){box.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}
+  try{if(acTab==='marks')await acMarks(box,B);else if(acTab==='res')await acResults(box,B);else if(acTab==='att')await acAttendance(box,B);else if(acTab==='prog')await acProgress(box,B);else await acSetup(box,B)}catch(e){box.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}
 }
 const acPicker=(B,withSubj)=>'<div class="row2" style="align-items:end">'+sel('acC','Class',S.classes.map(c=>[c.id,c.name]),acSel.cls)+sel('acE','Exam',B.exams.map(e=>[e.id,e.name]),acSel.exam)+'</div>'+(withSubj?sel('acS','Subject',B.subjOf(acSel.cls).map(x=>[x.id,x.name]),acSel.subj):'');
 function acBind(el,withSubj){
@@ -998,10 +1079,16 @@ async function acResults(box,B){
   acBind(box,false);
   $('#acX').onclick=()=>{const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows.map(r=>{const o={Roll:r.e.roll_no,Adm:r.e.students.admission_no,Name:r.e.students.full_name};subs.forEach(sj=>{const m=by[r.e.id+'|'+sj.id];o[sj.name]=m?(m.absent?'AB':m.marks):''});o.Total=r.t;o.Max=r.mx;o.Percent=r.pct;return o})),'Results');XLSX.writeFile(wb,'AlKhair_'+ex.short_name+'_'+(S.classes.find(c=>c.id===acSel.cls)||{}).name+'.xlsx')};
 }
-function acSetup(box,B){
+async function acSetup(box,B){
+  const [asg,stf]=await Promise.all([q(sb.from('teacher_assignments').select('*')),q(sb.from('staff').select('id,full_name,user_id,status').eq('status','active').order('full_name'))]);
+  const sNm=Object.fromEntries(stf.map(x=>[x.id,x])),cNm=id=>(classById(id)||{}).name||'',jNm=id=>(B.subjects.find(x=>x.id===id)||{}).name||'';
   box.innerHTML='<div class="card"><div class="card-head"><h2>Subjects per class</h2></div><p class="muted small" style="margin-bottom:8px">Starter subjects have been added. Please check and correct them.</p><div class="tablewrap"><table><thead><tr><th>Class</th>'+B.subjects.map(x=>'<th class="r">'+esc(x.name)+'</th>').join('')+'</tr></thead><tbody>'+
    S.classes.map(c=>'<tr><td class="nowrap">'+esc(c.name)+'</td>'+B.subjects.map(x=>'<td class="r"><input type="checkbox" data-c="'+c.id+'" data-s="'+x.id+'"'+(B.cs.some(y=>y.class_id===c.id&&y.subject_id===x.id)?' checked':'')+'></td>').join('')+'</tr>').join('')+'</tbody></table></div><div class="toolbar" style="margin-top:10px"><button class="btn ghost" id="acAdd">Add subject</button></div></div>'+
-   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Exams and default max marks</h2></div>'+B.exams.map(e=>'<div class="row2" style="align-items:end;margin-bottom:6px"><div><b>'+esc(e.name)+'</b></div><label class="small">Max marks <input class="input" type="number" min="1" step="0.5" data-ex="'+e.id+'" value="'+e.default_max+'" style="width:90px;display:inline-block"></label></div>').join('')+'</div>';
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Exams and default max marks</h2></div>'+B.exams.map(e=>'<div class="row2" style="align-items:end;margin-bottom:6px"><div><b>'+esc(e.name)+'</b></div><label class="small">Max marks <input class="input" type="number" min="1" step="0.5" data-ex="'+e.id+'" value="'+e.default_max+'" style="width:90px;display:inline-block"></label></div>').join('')+'</div>'+
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Teacher assignments</h2><button class="btn" id="asAdd">Assign teacher</button></div><p class="muted small" style="margin-bottom:8px">A class teacher marks daily attendance for the class. A subject teacher enters marks for that class and subject. Teachers see only what is assigned here. A teacher can log in once you create a login in Staff &gt; Staff list.</p>'+
+   (asg.length?'<div class="tablewrap"><table><thead><tr><th>Teacher</th><th>Class</th><th>Role</th><th>Login</th><th></th></tr></thead><tbody>'+asg.sort((a,b)=>(((sNm[a.staff_id]||{}).full_name)||'').localeCompare(((sNm[b.staff_id]||{}).full_name)||'')).map(a=>{const t=sNm[a.staff_id]||{};return'<tr><td>'+esc(t.full_name||'(left school)')+'</td><td>'+esc(cNm(a.class_id))+'</td><td>'+(a.is_class_teacher?'Class teacher':esc(jNm(a.subject_id))+' teacher')+'</td><td>'+(t.user_id?'<span class="pill good">Created</span>':'<span class="pill warn">No login yet</span>')+'</td><td class="r"><button class="btn ghost sm" data-ad="'+a.id+'">Remove</button></td></tr>'}).join('')+'</tbody></table></div>':'<p class="muted">No teachers assigned yet.</p>')+'</div>';
+  $('#asAdd').onclick=()=>formModal('Assign teacher',sel('staff_id','Teacher',stf.map(x=>[x.id,x.full_name]),'')+sel('class_id','Class',S.classes.map(c=>[c.id,c.name]),'')+sel('role','Role',[['ct','Class teacher (daily attendance)']].concat(B.subjects.map(x=>[x.id,x.name+' teacher (marks)'])),'ct'),'Assign',async fd=>{const role=fd.get('role'),row={staff_id:fd.get('staff_id'),class_id:fd.get('class_id'),is_class_teacher:role==='ct',subject_id:role==='ct'?null:role};await q(sb.from('teacher_assignments').insert(row));closeModal();toast('Assigned');vAcademics($('#view'))},{});
+  $$('[data-ad]').forEach(b=>b.onclick=async()=>{try{await q(sb.from('teacher_assignments').delete().eq('id',b.dataset.ad));toast('Removed');vAcademics($('#view'))}catch(e){toast(errMsg(e),true)}});
   $$('input[data-c]').forEach(i=>i.onchange=async()=>{try{if(i.checked)await q(sb.from('class_subjects').upsert({class_id:i.dataset.c,subject_id:i.dataset.s}));else await q(sb.from('class_subjects').delete().eq('class_id',i.dataset.c).eq('subject_id',i.dataset.s));toast('Saved')}catch(e){toast(errMsg(e),true);i.checked=!i.checked}});
   $$('input[data-ex]').forEach(i=>i.onchange=async()=>{try{await q(sb.from('exams').update({default_max:Number(i.value)}).eq('id',i.dataset.ex));toast('Saved')}catch(e){toast(errMsg(e),true)}});
   $('#acAdd').onclick=()=>formModal('Add subject',inp('name','Subject name','','text','required'),'Add',async fd=>{await q(sb.from('subjects').insert({name:fd.get('name').trim(),sort_order:B.subjects.length+1}));closeModal();vAcademics($('#view'))},{});
