@@ -416,8 +416,8 @@ async function vDashboard(el){
   if(dueStudents)alerts.push(['warn','Dues',dueStudents+' students have fee dues of '+inr(out)+' in total.']);
   if(missStudents)alerts.push(['warn','Documents',missStudents+' students have documents missing.']);
   try{const pm=addMonth(today().slice(0,7),-1)+'-01',[pl,at,stf]=await Promise.all([q(sb.from('payroll_lines').select('status').eq('month',pm)),q(sb.from('staff_attendance').select('status').eq('work_date',today())),q(sb.from('staff').select('id').eq('status','active'))]);
-    const dr=pl.filter(l=>l.status==='draft').length;if(dr)alerts.push(['warn','Salary',monthLabel(pm.slice(0,7))+' ki salary ke '+dr+' staff abhi unpaid hain. Staff > Salary mein dekhiye.']);
-    if(stf.length)alerts.push(['neutral','Staff','Aaj '+at.filter(a=>['present','late','half_day'].includes(a.status)).length+' of '+stf.length+' staff school mein hain.'])}catch(e){}
+    const dr=pl.filter(l=>l.status==='draft').length;if(dr)alerts.push(['warn','Salary',monthLabel(pm.slice(0,7))+' salary: '+dr+' staff still unpaid. See Staff > Salary.']);
+    if(stf.length)alerts.push(['neutral','Staff','Today '+at.filter(a=>['present','late','half_day'].includes(a.status)).length+' of '+stf.length+' staff are in school.'])}catch(e){}
   alerts.push([tied?'good':'bad','Books',tied?'Fee ledger and student balances agree.':'Fee ledger differs from student balances by '+inr(ck.difference)+'. Check Accounts.']);
   if(F.fc.length){const lo=F.fc.slice().sort((a,b)=>a.y-b.y)[0];alerts.push(['neutral','Forecast','Lowest expected collection ahead: '+monthLabel(lo.m)+', about '+inr(lo.y)+'.'])}
   el.innerHTML=head('Dashboard','Session '+S.year.label,'<button class="btn ghost" id="bkup">Backup (Excel)</button>')+
@@ -554,7 +554,7 @@ async function vStudent(el,enrId){
   const required=S.docTypes.filter(d=>cls.sort_order>=d.required_from_order),missing=required.filter(d=>!docBy[d.id]);
   const net=num(fs.gross_fee)-num(fs.discount)+num(fs.previous_dues);
   let od=[];try{od=await q(sb.from('old_dues').select('*').eq('student_id',en.student_id).in('status',['open','linked']))}catch(e){}
-  const odBanner=od.length?'<p class="banner" style="margin-bottom:12px"><b>Pichhle saal ka baaki:</b> '+od.map(o=>inr(o.amount)+' ('+esc(o.year_label)+', '+esc(o.class_name||'')+')').join(', ')+'. Ye is saal ki fees mein shamil nahi hai. <a href="#/olddues">Old dues</a></p>':'';
+  const odBanner=od.length?'<p class="banner" style="margin-bottom:12px"><b>Previous session dues:</b> '+od.map(o=>inr(o.amount)+' ('+esc(o.year_label)+', '+esc(o.class_name||'')+')').join(', ')+'. Not included in this session\'s fees. <a href="#/olddues">Old dues</a></p>':'';
   el.innerHTML='<p class="small"><a href="#/students">&larr; All students</a></p>'+
    head(stu.full_name,'Admission no '+stu.admission_no+' · '+cls.name+' · '+S.year.label,'<span class="pill '+(stu.status==='active'?'good':'neutral')+'">'+esc(stu.status)+'</span><button class="btn ghost" id="editStu">Edit details</button>')+odBanner+
    '<div class="kpis">'+kpi('Fee due',inr(net),'Fee '+inr(fs.gross_fee)+' − discount '+inr(fs.discount)+(num(fs.previous_dues)?' + previous '+inr(fs.previous_dues):''))+kpi('Paid',inr(fs.paid),payments(pay).n+' payments')+kpi('Balance',inr(Math.max(0,num(fs.balance))),st[0])+kpi('Documents',missing.length?missing.length+' missing':'Complete',required.length-missing.length+' of '+required.length+' received')+'</div>'+
@@ -887,10 +887,10 @@ const isOff=(cfg,holSet,ds)=>{const d=new Date(ds+'T00:00:00');return (cfg.weekl
 
 const BACKUP_TABLES=['academic_years','classes','sections','students','enrollments','student_documents','fee_heads','fee_structure','fee_assessments','fee_discounts','fee_opening_balances','payments','accounts','journal_entries','journal_lines','cash_transactions','staff','staff_attendance','school_holidays','payroll_lines','subjects','class_subjects','exams','marks','school_settings'];
 async function backupAll(btn){
-  const old=btn.textContent;btn.disabled=true;btn.textContent='Backup ban raha hai...';
+  const old=btn.textContent;btn.disabled=true;btn.textContent='Preparing backup...';
   try{const wb=XLSX.utils.book_new();
     for(const t of BACKUP_TABLES){const rows=await all((a,b)=>sb.from(t).select('*').range(a,b));XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows.length?rows:[{}]),t.slice(0,31))}
-    XLSX.writeFile(wb,'AlKhair_ERP_backup_'+today()+'.xlsx');toast('Backup download ho gaya')}
+    XLSX.writeFile(wb,'AlKhair_ERP_backup_'+today()+'.xlsx');toast('Backup downloaded')}
   catch(e){toast(errMsg(e),true)}finally{btn.disabled=false;btn.textContent=old}
 }
 document.addEventListener('click',e=>{const b=e.target.closest&&e.target.closest('#bkup');if(b)backupAll(b)});
@@ -900,21 +900,21 @@ async function vOldDues(el){
   const [rows,stus]=await Promise.all([q(sb.from('old_dues').select('*').order('class_name').order('student_name')),all((a,b)=>sb.from('students').select('id,admission_no,full_name,father_name').order('full_name').range(a,b))]);
   const open=rows.filter(r=>r.status==='open'||r.status==='linked'),sn=Object.fromEntries(stus.map(x=>[x.id,x]));
   const enr=await q(sb.from('enrollments').select('student_id,class_id').eq('academic_year_id',S.year.id));const clsOf=Object.fromEntries(enr.map(e=>[e.student_id,(classById(e.class_id)||{}).name]));
-  el.innerHTML=head('Old dues',open.length+' bachche · '+inr(sum(open.map(r=>num(r.amount))))+' pichhle saal ke baaki (is session ki fees mein shamil nahi)')+
-   '<div class="card"><div class="tablewrap"><table><thead><tr><th>Naam</th><th>Pichhli class</th><th>Pichhla adm.</th><th class="r">Baaki</th><th>Status</th><th></th></tr></thead><tbody>'+
-   rows.map(r=>{const s_=r.student_id&&sn[r.student_id];return'<tr><td>'+esc(r.student_name)+'</td><td>'+esc(r.class_name||'')+' <span class="muted small">'+esc(r.year_label)+'</span></td><td>'+esc(r.old_admission_no||'')+'</td><td class="r"><b>'+inr(r.amount)+'</b></td><td>'+(r.status==='cleared'?'<span class="pill good">Cleared</span>':r.status==='written_off'?'<span class="pill neutral">Written off</span>':s_?'<span class="pill warn">Is saal: '+esc(s_.full_name)+' ('+esc(clsOf[s_.id]||'')+', adm '+esc(s_.admission_no)+')</span>':'<span class="pill neutral">School mein nahi</span>')+(r.note?' <span class="muted small">'+esc(r.note)+'</span>':'')+'</td><td class="r nowrap">'+(r.status==='open'||r.status==='linked'?'<button class="btn ghost sm" data-l="'+r.id+'">'+(s_?'Badlo':'Is saal ke bache se jodo')+'</button> <button class="btn ghost sm" data-c="'+r.id+'">Cleared</button> <button class="btn ghost sm" data-w="'+r.id+'">Write off</button>':'')+'</td></tr>'}).join('')+'</tbody></table></div></div>';
+  el.innerHTML=head('Old dues',open.length+' students · '+inr(sum(open.map(r=>num(r.amount))))+' from previous sessions (not included in this session\'s fees)')+
+   '<div class="card"><div class="tablewrap"><table><thead><tr><th>Name</th><th>Previous class</th><th>Old adm. no.</th><th class="r">Due</th><th>Status</th><th></th></tr></thead><tbody>'+
+   rows.map(r=>{const s_=r.student_id&&sn[r.student_id];return'<tr><td>'+esc(r.student_name)+'</td><td>'+esc(r.class_name||'')+' <span class="muted small">'+esc(r.year_label)+'</span></td><td>'+esc(r.old_admission_no||'')+'</td><td class="r"><b>'+inr(r.amount)+'</b></td><td>'+(r.status==='cleared'?'<span class="pill good">Cleared</span>':r.status==='written_off'?'<span class="pill neutral">Written off</span>':s_?'<span class="pill warn">This session: '+esc(s_.full_name)+' ('+esc(clsOf[s_.id]||'')+', adm '+esc(s_.admission_no)+')</span>':'<span class="pill neutral">Not in school</span>')+(r.note?' <span class="muted small">'+esc(r.note)+'</span>':'')+'</td><td class="r nowrap">'+(r.status==='open'||r.status==='linked'?'<button class="btn ghost sm" data-l="'+r.id+'">'+(s_?'Change link':'Link to current student')+'</button> <button class="btn ghost sm" data-c="'+r.id+'">Cleared</button> <button class="btn ghost sm" data-w="'+r.id+'">Write off</button>':'')+'</td></tr>'}).join('')+'</tbody></table></div></div>';
   const done=async(id,patch,msg)=>{try{await q(sb.from('old_dues').update(patch).eq('id',id));toast(msg);vOldDues(el)}catch(e){toast(errMsg(e),true)}};
-  $$('[data-c]').forEach(b=>b.onclick=()=>formModal('Cleared mark karein',inp('note','Kaise clear hua (jaise jama kiya, date)','','text','required'),'Save',async fd=>{await done(b.dataset.c,{status:'cleared',note:fd.get('note').trim()},'Cleared');closeModal()},{}));
-  $$('[data-w]').forEach(b=>b.onclick=()=>formModal('Write off karein',inp('note','Wajah','','text','required'),'Save',async fd=>{await done(b.dataset.w,{status:'written_off',note:fd.get('note').trim()},'Written off');closeModal()},{}));
+  $$('[data-c]').forEach(b=>b.onclick=()=>formModal('Mark as cleared',inp('note','How was it cleared (for example paid on date)','','text','required'),'Save',async fd=>{await done(b.dataset.c,{status:'cleared',note:fd.get('note').trim()},'Cleared');closeModal()},{}));
+  $$('[data-w]').forEach(b=>b.onclick=()=>formModal('Write off',inp('note','Reason','','text','required'),'Save',async fd=>{await done(b.dataset.w,{status:'written_off',note:fd.get('note').trim()},'Written off');closeModal()},{}));
   $$('[data-l]').forEach(b=>b.onclick=()=>{const r=rows.find(x=>x.id===b.dataset.l),w=(r.student_name||'').toLowerCase().split(/\s+/)[0];
     const cand=stus.filter(x=>x.full_name.toLowerCase().includes(w)).slice(0,40);
-    formModal('Is saal ka bachcha chuniye: '+r.student_name,sel('sid','Student',[['','— nahi, school mein nahi hai —']].concat(cand.map(x=>[x.id,x.full_name+' · '+(clsOf[x.id]||'no enrolment')+' · adm '+x.admission_no+' · '+(x.father_name||'')])),r.student_id||''),'Save',async fd=>{const v=fd.get('sid');await done(r.id,{student_id:v||null,status:v?'linked':'open'},v?'Joda gaya':'Link hata diya');closeModal()},{})});
+    formModal('Choose the current student: '+r.student_name,sel('sid','Student',[['','— none, not in school —']].concat(cand.map(x=>[x.id,x.full_name+' · '+(clsOf[x.id]||'no enrolment')+' · adm '+x.admission_no+' · '+(x.father_name||'')])),r.student_id||''),'Save',async fd=>{const v=fd.get('sid');await done(r.id,{student_id:v||null,status:v?'linked':'open'},v?'Linked':'Link removed');closeModal()},{})});
 }
 
 /* ---------- Reminders: fee and document messages (WhatsApp links, no API needed) ---------- */
 let remTab='fees',remCls='all',remMin=1;
-const REM_FEES="Assalamu Alaikum {parent},\nAl-Khair Academy ki taraf se yaad-dehani: {student} (Class {class}) ki ₹{due} fees baaki hai. Aap apni suvidha ke anusaar jama karwa dein. Shukriya.\n- Al-Khair Academy";
-const REM_DOCS="Assalamu Alaikum {parent},\nAl-Khair Academy ki taraf se: {student} (Class {class}) ke ye documents abhi baaki hain: {docs}. Kripya jald school mein jama karwa dein. Shukriya.\n- Al-Khair Academy";
+const REM_FEES="Assalamu Alaikum {parent},\nThis is a gentle reminder from Al-Khair Academy that the fee of Rs {due} for {student} (Class {class}) is pending. Please deposit it at your earliest convenience. Thank you.\n- Al-Khair Academy";
+const REM_DOCS="Assalamu Alaikum {parent},\nFrom Al-Khair Academy: the following documents for {student} (Class {class}) are still pending: {docs}. Please submit them at school soon. Thank you.\n- Al-Khair Academy";
 const waLink=(m,text)=>{let d=String(m||'').replace(/\D/g,'').slice(-10);return d.length===10?'https://wa.me/91'+d+'?text='+encodeURIComponent(text):null};
 const fillTpl=(t,o)=>t.replace(/\{(\w+)\}/g,(_,k)=>o[k]!=null?o[k]:'');
 async function vReminders(el){
@@ -929,12 +929,12 @@ async function vReminders(el){
     list=ids.filter(r=>remCls==='all'||r.class_name===remCls).map(r=>{const d=(by[r.student_id]||[]).concat(IDS.filter(([k])=>idMiss(r,k)).map(([,n])=>n));return{id:r.student_id,name:r.full_name,cls:r.class_name,parent:r.father_name||'Parent',mobile:r.guardian_mobile,docs:d,vars:{student:r.full_name,class:r.class_name,parent:r.father_name||'Parent',docs:d.join(', ')}}}).filter(x=>x.docs.length).sort((a,b)=>b.docs.length-a.docs.length);
   }
   const msg=x=>fillTpl(tpl,x.vars),noNum=list.filter(x=>!waLink(x.mobile,'x')).length;
-  el.innerHTML=head('Reminders','Message taiyaar, WhatsApp pe ek click mein bhejiye')+
+  el.innerHTML=head('Reminders','Messages are ready. Send each with one click on WhatsApp')+
    '<div class="seg" role="group" style="justify-self:start">'+[['fees','Fees dues'],['docs','Documents']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(remTab===t[0])+'">'+t[1]+'</button>').join('')+'</div>'+
-   '<div class="card" style="margin-top:12px"><div class="row2" style="align-items:end">'+sel('rcls','Class',[['all','All classes']].concat(S.classes.map(c=>[c.name,c.name])),remCls)+(remTab==='fees'?inp('rmin','Kam se kam baaki (₹)',remMin,'number','min="1" step="100"'):'')+'</div>'+
-   '<div class="field"><label for="rtpl">Message (badal sakte hain; {parent} {student} {class} '+(remTab==='fees'?'{due}':'{docs}')+')</label><textarea class="input" id="rtpl" rows="4">'+esc(tpl)+'</textarea></div></div>'+
-   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>'+list.length+' students'+(remTab==='fees'?' · '+inr(sum(list.map(x=>x.amt))):'')+'</h2><button class="btn ghost sm" id="rcsv">Download list</button></div>'+(noNum?'<p class="muted small">'+noNum+' students ka mobile number nahi hai ya galat hai.</p>':'')+
-   '<div class="tablewrap"><table><thead><tr><th>Name</th><th>Class</th><th>Parent</th>'+(remTab==='fees'?'<th class="r">Baaki</th>':'<th>Baaki documents</th>')+'<th></th></tr></thead><tbody>'+
+   '<div class="card" style="margin-top:12px"><div class="row2" style="align-items:end">'+sel('rcls','Class',[['all','All classes']].concat(S.classes.map(c=>[c.name,c.name])),remCls)+(remTab==='fees'?inp('rmin','Minimum due (₹)',remMin,'number','min="1" step="100"'):'')+'</div>'+
+   '<div class="field"><label for="rtpl">Message (you can edit it; {parent} {student} {class} '+(remTab==='fees'?'{due}':'{docs}')+')</label><textarea class="input" id="rtpl" rows="4">'+esc(tpl)+'</textarea></div></div>'+
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>'+list.length+' students'+(remTab==='fees'?' · '+inr(sum(list.map(x=>x.amt))):'')+'</h2><button class="btn ghost sm" id="rcsv">Download list</button></div>'+(noNum?'<p class="muted small">'+noNum+' students have no mobile number or an invalid one.</p>':'')+
+   '<div class="tablewrap"><table><thead><tr><th>Name</th><th>Class</th><th>Parent</th>'+(remTab==='fees'?'<th class="r">Due</th>':'<th>Pending documents</th>')+'<th></th></tr></thead><tbody>'+
    list.map(x=>{const l=waLink(x.mobile,msg(x));return'<tr><td>'+esc(x.name)+'</td><td class="nowrap">'+esc(x.cls)+'</td><td>'+esc(x.parent)+'</td><td'+(remTab==='fees'?' class="r"><b>'+inr(x.amt)+'</b>':'>'+esc(x.docs.join(', ')))+'</td><td class="r nowrap">'+(l?'<a class="btn ghost sm" target="_blank" rel="noopener" href="'+l+'">WhatsApp</a>':'<span class="muted small">no number</span>')+'</td></tr>'}).join('')+'</tbody></table></div></div>';
   $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{remTab=b.dataset.t;vReminders(el)});
   $('#rcls').onchange=e=>{remCls=e.target.value;vReminders(el)};
@@ -974,7 +974,7 @@ async function acEnrolled(){
 }
 async function acMarks(box,B){
   const subs=B.subjOf(acSel.cls);
-  if(!subs.length){box.innerHTML=acPicker(B,false)+'<p class="muted">Is class ke subjects set nahi hain. Setup tab mein daaliye.</p>';acBind(box,false);return}
+  if(!subs.length){box.innerHTML=acPicker(B,false)+'<p class="muted">No subjects are set for this class. Add them in the Setup tab.</p>';acBind(box,false);return}
   if(!subs.find(x=>x.id===acSel.subj))acSel.subj=subs[0].id;
   const ex=B.exams.find(e=>e.id===acSel.exam),[en,mk]=await Promise.all([acEnrolled(),q(sb.from('marks').select('*').eq('exam_id',acSel.exam).eq('subject_id',acSel.subj))]);
   const by=Object.fromEntries(mk.map(m=>[m.enrollment_id,m])),max0=mk.length?mk[0].max_marks:ex.default_max;
@@ -982,12 +982,12 @@ async function acMarks(box,B){
    '<div class="tablewrap"><table><thead><tr><th>Roll</th><th>Adm.</th><th>Name</th><th>Marks</th><th>Absent</th></tr></thead><tbody>'+en.map(e=>{const m=by[e.id];return'<tr><td>'+(e.roll_no||'')+'</td><td class="nowrap">'+esc(e.students.admission_no)+'</td><td>'+esc(e.students.full_name)+'</td><td><input class="input acm" data-e="'+e.id+'" type="number" min="0" step="0.5" value="'+(m&&m.marks!=null?m.marks:'')+'" style="width:90px"></td><td><input type="checkbox" class="aca" data-e="'+e.id+'"'+(m&&m.absent?' checked':'')+'></td></tr>'}).join('')+'</tbody></table></div><div style="margin-top:12px"><button class="btn" id="acSave">Save marks</button></div></div>';
   acBind(box,true);
   $('#acSave').onclick=async()=>{try{
-    const max=Number($('#acMax').value);if(!(max>0))throw new Error('Max marks daaliye');
+    const max=Number($('#acMax').value);if(!(max>0))throw new Error('Enter the maximum marks');
     const rows=[];$$('.acm').forEach(i=>{const a=$('.aca[data-e="'+i.dataset.e+'"]').checked,v=i.value.trim();
-      if(v===''&&!a)return;if(!a&&Number(v)>max)throw new Error('Marks max se zyada hain: '+i.closest('tr').children[2].textContent);
+      if(v===''&&!a)return;if(!a&&Number(v)>max)throw new Error('Marks are above the maximum: '+i.closest('tr').children[2].textContent);
       rows.push({exam_id:acSel.exam,enrollment_id:i.dataset.e,subject_id:acSel.subj,marks:a||v===''?null:Number(v),max_marks:max,absent:a,entered_by:S.user.id,updated_at:new Date().toISOString()})});
-    if(!rows.length)throw new Error('Koi marks nahi daale');
-    await q(sb.from('marks').upsert(rows,{onConflict:'exam_id,enrollment_id,subject_id'}));toast(rows.length+' students ke marks save hue')}catch(e){toast(errMsg(e),true)}};
+    if(!rows.length)throw new Error('No marks entered');
+    await q(sb.from('marks').upsert(rows,{onConflict:'exam_id,enrollment_id,subject_id'}));toast(rows.length+' students\' marks saved')}catch(e){toast(errMsg(e),true)}};
 }
 async function acResults(box,B){
   const subs=B.subjOf(acSel.cls),ex=B.exams.find(e=>e.id===acSel.exam),[en,mk]=await Promise.all([acEnrolled(),q(sb.from('marks').select('*').eq('exam_id',acSel.exam))]);
@@ -999,7 +999,7 @@ async function acResults(box,B){
   $('#acX').onclick=()=>{const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows.map(r=>{const o={Roll:r.e.roll_no,Adm:r.e.students.admission_no,Name:r.e.students.full_name};subs.forEach(sj=>{const m=by[r.e.id+'|'+sj.id];o[sj.name]=m?(m.absent?'AB':m.marks):''});o.Total=r.t;o.Max=r.mx;o.Percent=r.pct;return o})),'Results');XLSX.writeFile(wb,'AlKhair_'+ex.short_name+'_'+(S.classes.find(c=>c.id===acSel.cls)||{}).name+'.xlsx')};
 }
 function acSetup(box,B){
-  box.innerHTML='<div class="card"><div class="card-head"><h2>Subjects per class</h2></div><p class="muted small" style="margin-bottom:8px">Maine shuruaati subjects daale hain, zaroor check kar lijiye aur sahi kar dijiye.</p><div class="tablewrap"><table><thead><tr><th>Class</th>'+B.subjects.map(x=>'<th class="r">'+esc(x.name)+'</th>').join('')+'</tr></thead><tbody>'+
+  box.innerHTML='<div class="card"><div class="card-head"><h2>Subjects per class</h2></div><p class="muted small" style="margin-bottom:8px">Starter subjects have been added. Please check and correct them.</p><div class="tablewrap"><table><thead><tr><th>Class</th>'+B.subjects.map(x=>'<th class="r">'+esc(x.name)+'</th>').join('')+'</tr></thead><tbody>'+
    S.classes.map(c=>'<tr><td class="nowrap">'+esc(c.name)+'</td>'+B.subjects.map(x=>'<td class="r"><input type="checkbox" data-c="'+c.id+'" data-s="'+x.id+'"'+(B.cs.some(y=>y.class_id===c.id&&y.subject_id===x.id)?' checked':'')+'></td>').join('')+'</tr>').join('')+'</tbody></table></div><div class="toolbar" style="margin-top:10px"><button class="btn ghost" id="acAdd">Add subject</button></div></div>'+
    '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Exams and default max marks</h2></div>'+B.exams.map(e=>'<div class="row2" style="align-items:end;margin-bottom:6px"><div><b>'+esc(e.name)+'</b></div><label class="small">Max marks <input class="input" type="number" min="1" step="0.5" data-ex="'+e.id+'" value="'+e.default_max+'" style="width:90px;display:inline-block"></label></div>').join('')+'</div>';
   $$('input[data-c]').forEach(i=>i.onchange=async()=>{try{if(i.checked)await q(sb.from('class_subjects').upsert({class_id:i.dataset.c,subject_id:i.dataset.s}));else await q(sb.from('class_subjects').delete().eq('class_id',i.dataset.c).eq('subject_id',i.dataset.s));toast('Saved')}catch(e){toast(errMsg(e),true);i.checked=!i.checked}});
@@ -1041,37 +1041,37 @@ async function stPay(box,B){
   const hbTot=Object.values(hbBy).reduce((a,b)=>a+b,0);
   box.innerHTML='<div class="toolbar" style="margin-bottom:10px;gap:8px"><button class="btn ghost sm" id="pp">‹</button><b style="min-width:70px;text-align:center">'+monthLabel(payMonth)+'</b><button class="btn ghost sm" id="pn">›</button>'+
    (drafts.length?'<button class="btn ghost" id="phdfc">HDFC bulk file</button>':'')+'<button class="btn ghost" id="pman">Manual entry (helpers)</button><button class="btn" id="pgen">'+(lines.length?'Recalculate drafts':'Calculate salary')+'</button>'+(lines.length?'<button class="btn ghost" id="pcsv">Download</button>':'')+'</div>'+
-   '<div class="kpis">'+kpi('Total payable',inr(tot(lines)),lines.length+' staff')+kpi('Paid',inr(tot(paid)),paid.length+' staff')+kpi('Pending',inr(tot(drafts)),drafts.length+' staff')+kpi('Online / Cash',inr(tot(lines.filter(l=>l.pay_mode==='online')))+' / '+inr(tot(lines.filter(l=>l.pay_mode==='cash'))),'by pay mode')+kpi('Holdback jama',inr(hbTot),'Session '+sy+'-'+String(sy+1).slice(2)+', April mein dena')+'</div>'+
+   '<div class="kpis">'+kpi('Total payable',inr(tot(lines)),lines.length+' staff')+kpi('Paid',inr(tot(paid)),paid.length+' staff')+kpi('Pending',inr(tot(drafts)),drafts.length+' staff')+kpi('Online / Cash',inr(tot(lines.filter(l=>l.pay_mode==='online')))+' / '+inr(tot(lines.filter(l=>l.pay_mode==='cash'))),'by pay mode')+kpi('Holdback held',inr(hbTot),'Session '+sy+'-'+String(sy+1).slice(2)+', payable in April')+'</div>'+
    '<div class="card"><div class="card-head"><h2>Salary '+monthLabel(payMonth)+'</h2></div>'+
    (lines.length?'<div class="tablewrap"><table><thead><tr><th>Name</th><th class="r">Salary</th><th class="r">Paid days</th><th class="r">Half</th><th class="r">Earned</th><th class="r">Cut</th><th class="r">Holdback</th><th class="r">Adj.</th><th class="r">Net pay</th><th>Mode</th><th>Status</th><th></th></tr></thead><tbody>'+
-    lines.sort((a,b)=>((nm[a.staff_id]||{}).full_name||'').localeCompare((nm[b.staff_id]||{}).full_name||'')).map(l=>'<tr><td>'+esc((nm[l.staff_id]||{}).full_name||'')+'</td><td class="r">'+inr(l.salary)+'</td><td class="r">'+l.paid_days+'/'+l.days_in_month+'</td><td class="r">'+(l.half_days||'')+'</td><td class="r">'+inr(l.earned)+'</td><td class="r">'+(num(l.half_day_cut)?inr(l.half_day_cut):'')+'</td><td class="r">'+(num(l.holdback)?inr(l.holdback):'')+'</td><td class="r" title="'+esc(l.adjustment_note||'')+'">'+(num(l.adjustment)?inr(l.adjustment):'')+'</td><td class="r"><b>'+inr(l.net_pay)+'</b></td><td>'+(l.status==='draft'?'<select class="input" style="padding:2px 4px;min-width:78px" data-mode="'+l.id+'"><option value="online"'+(l.pay_mode==='online'?' selected':'')+'>Bank</option><option value="cash"'+(l.pay_mode==='cash'?' selected':'')+'>Cash</option></select>':esc(l.pay_mode||''))+'</td><td>'+(l.status==='paid'?'<span class="pill good">Paid'+(l.paid_on?' '+fmtDate(l.paid_on):'')+'</span>':'<span class="pill neutral">Draft</span>')+'</td><td class="r nowrap">'+(l.status==='draft'?'<button class="btn ghost sm" data-pay="'+l.id+'">Mark paid</button>':'')+'</td></tr>').join('')+'</tbody></table></div>':'<p class="muted">Is mahine ki salary abhi calculate nahi hui. "Calculate salary" dabaiye: attendance, holidays aur half-day se hisab ban jayega.</p>')+'</div>'+
-   (hbTot?'<div class="card" style="margin-top:12px"><div class="card-head"><h2>Holdback (10%) jo April mein milega</h2></div><div class="tablewrap"><table><thead><tr><th>Name</th><th class="r">Ab tak jama</th></tr></thead><tbody>'+Object.keys(hbBy).sort((a,b)=>((nm[a]||{}).full_name||'').localeCompare((nm[b]||{}).full_name||'')).map(id=>'<tr><td>'+esc((nm[id]||{}).full_name||'')+(nm[id]&&nm[id].status==='left'?' <span class="muted small">left</span>':'')+'</td><td class="r">'+inr(hbBy[id])+'</td></tr>').join('')+'</tbody></table></div></div>':'')+
+    lines.sort((a,b)=>((nm[a.staff_id]||{}).full_name||'').localeCompare((nm[b.staff_id]||{}).full_name||'')).map(l=>'<tr><td>'+esc((nm[l.staff_id]||{}).full_name||'')+'</td><td class="r">'+inr(l.salary)+'</td><td class="r">'+l.paid_days+'/'+l.days_in_month+'</td><td class="r">'+(l.half_days||'')+'</td><td class="r">'+inr(l.earned)+'</td><td class="r">'+(num(l.half_day_cut)?inr(l.half_day_cut):'')+'</td><td class="r">'+(num(l.holdback)?inr(l.holdback):'')+'</td><td class="r" title="'+esc(l.adjustment_note||'')+'">'+(num(l.adjustment)?inr(l.adjustment):'')+'</td><td class="r"><b>'+inr(l.net_pay)+'</b></td><td>'+(l.status==='draft'?'<select class="input" style="padding:2px 4px;min-width:78px" data-mode="'+l.id+'"><option value="online"'+(l.pay_mode==='online'?' selected':'')+'>Bank</option><option value="cash"'+(l.pay_mode==='cash'?' selected':'')+'>Cash</option></select>':esc(l.pay_mode||''))+'</td><td>'+(l.status==='paid'?'<span class="pill good">Paid'+(l.paid_on?' '+fmtDate(l.paid_on):'')+'</span>':'<span class="pill neutral">Draft</span>')+'</td><td class="r nowrap">'+(l.status==='draft'?'<button class="btn ghost sm" data-pay="'+l.id+'">Mark paid</button>':'')+'</td></tr>').join('')+'</tbody></table></div>':'<p class="muted">Salary for this month has not been calculated yet. Click "Calculate salary" to build it from attendance, holidays and half days.</p>')+'</div>'+
+   (hbTot?'<div class="card" style="margin-top:12px"><div class="card-head"><h2>Holdback (10%) to be paid in April</h2></div><div class="tablewrap"><table><thead><tr><th>Name</th><th class="r">Held so far</th></tr></thead><tbody>'+Object.keys(hbBy).sort((a,b)=>((nm[a]||{}).full_name||'').localeCompare((nm[b]||{}).full_name||'')).map(id=>'<tr><td>'+esc((nm[id]||{}).full_name||'')+(nm[id]&&nm[id].status==='left'?' <span class="muted small">left</span>':'')+'</td><td class="r">'+inr(hbBy[id])+'</td></tr>').join('')+'</tbody></table></div></div>':'')+
    (mk.length?'<div class="card" style="margin-top:12px"><div class="card-head"><h2>Month-wise salary</h2></div><div class="tablewrap"><table><thead><tr><th>Month</th><th class="r">Total net pay</th></tr></thead><tbody>'+mk.map(k=>'<tr><td>'+monthLabel(k)+'</td><td class="r">'+inr(byM[k])+'</td></tr>').join('')+'</tbody></table></div></div>':'');
   $('#pp').onclick=()=>{payMonth=addMonth(payMonth,-1);vStaff($('#view'))};
   $('#pn').onclick=()=>{payMonth=addMonth(payMonth,1);vStaff($('#view'))};
   $('#pgen').onclick=async()=>{try{await rpc('payroll_generate',{p_month:d0});toast('Salary calculated');vStaff($('#view'))}catch(e){toast(errMsg(e),true)}};
   $('#pman').onclick=()=>formModal('Manual salary entry',
-    '<p class="muted small">Jin ki salary paper pe nikalte hain (jaise Zahida Baji, Shameena Baji). Sirf final amount daaliye.</p>'+
+    '<p class="muted small">For staff whose salary is worked out on paper (for example Zahida Baji, Shameena Baji). Enter only the final amount.</p>'+
     sel('staff_id','Staff',B.staff.filter(x=>x.status==='active').map(x=>[x.id,x.full_name]),'')+
     inp('amount','Amount (₹)','','number','required min="0" step="1"')+sel('pay_mode','Mode',[['cash','Cash'],['online','Online']],'cash')+inp('note','Note','','text','','Optional, jaise "26 din"'),'Save',async fd=>{
-      const a=Math.round(Number(fd.get('amount')));if(!(a>=0))throw new Error('Amount daaliye');
+      const a=Math.round(Number(fd.get('amount')));if(!(a>=0))throw new Error('Enter the amount');
       const dim=new Date(+payMonth.slice(0,4),+payMonth.slice(5,7),0).getDate();
       await q(sb.from('payroll_lines').upsert({staff_id:fd.get('staff_id'),month:d0,salary:a,days_in_month:dim,paid_days:dim,unpaid_days:0,per_day:Math.round(a/dim*100)/100,hourly:0,earned:a,half_day_cut:0,holdback:0,adjustment:0,net_pay:a,pay_mode:fd.get('pay_mode'),status:'draft',source:'erp',note:(fd.get('note')||'').trim()||'Manual (paper calculation)'},{onConflict:'staff_id,month'}));
       closeModal();toast('Saved');vStaff($('#view'))},{});
-  $$('[data-mode]').forEach(x=>x.onchange=async()=>{try{await q(sb.from('payroll_lines').update({pay_mode:x.value}).eq('id',x.dataset.mode).eq('status','draft'));toast('Mode badal diya');vStaff($('#view'))}catch(e){toast(errMsg(e),true)}});
+  $$('[data-mode]').forEach(x=>x.onchange=async()=>{try{await q(sb.from('payroll_lines').update({pay_mode:x.value}).eq('id',x.dataset.mode).eq('status','draft'));toast('Pay mode updated');vStaff($('#view'))}catch(e){toast(errMsg(e),true)}});
   const ph=$('#phdfc');if(ph)ph.onclick=()=>{
     const cf=B.cfg,on=drafts.filter(l=>l.pay_mode==='online'),ok=l=>{const x=nm[l.staff_id]||{};return x.bank_account_no&&x.bank_ifsc&&/^[A-Z]{4}0[A-Z0-9]{6}$/.test(x.bank_ifsc)},miss=on.filter(l=>!ok(l)),cash=drafts.filter(l=>l.pay_mode==='cash'),hasRent=cf.rent_payee_account&&cf.rent_amount;
-    formModal('HDFC bulk transfer file','<p class="muted small">'+on.length+' online payments, total '+inr(tot(on))+'.'+(miss.length?' <b style="color:var(--bad)">Bank details ya IFSC galat/missing: '+miss.map(l=>esc((nm[l.staff_id]||{}).full_name)).join(', ')+'.</b> Inki rows file mein nahi aayengi.':'')+'</p>'+
-     (hasRent?'<label style="display:flex;gap:8px;align-items:center;margin:8px 0"><input type="checkbox" name="rent" checked> Rent bhi file mein daalo: '+esc(cf.rent_payee_name)+' '+inr(cf.rent_amount)+'</label>':'')+
-     '<p class="muted small">Debit account: '+esc(cf.debit_account_no||'set nahi hai')+'. Cash wale (' +cash.length+') alag sheet "Cash" mein aayenge.</p>','Download Excel',async fd=>{
-      if(!cf.debit_account_no)throw new Error('Debit account number set nahi hai');
+    formModal('HDFC bulk transfer file','<p class="muted small">'+on.length+' online payments, total '+inr(tot(on))+'.'+(miss.length?' <b style="color:var(--bad)">Bank details or IFSC missing or invalid: '+miss.map(l=>esc((nm[l.staff_id]||{}).full_name)).join(', ')+'.</b> Their rows will not be in the file.':'')+'</p>'+
+     (hasRent?'<label style="display:flex;gap:8px;align-items:center;margin:8px 0"><input type="checkbox" name="rent" checked> Include rent in the file: '+esc(cf.rent_payee_name)+' '+inr(cf.rent_amount)+'</label>':'')+
+     '<p class="muted small">Debit account: '+esc(cf.debit_account_no||'not set')+'. Cash payments (' +cash.length+') go on a separate "Cash" sheet.</p>','Download Excel',async fd=>{
+      if(!cf.debit_account_no)throw new Error('Debit account number is not set');
       const row=(i,ifsc,acc,name,bank,amt)=>({'S.No.':i,'Debit Account Number':cf.debit_account_no,'Debit Firm Name':cf.debit_firm_name||'AL - KHAIR ACADEMY','Credit IFSC Code':ifsc,'Credit Account Number':acc,'Credit Party Name':name,'Bank Name':bank,'Amount':amt});
       const rows=on.filter(ok).map((l,i)=>{const x=nm[l.staff_id];return row(i+1,x.bank_ifsc,x.bank_account_no,x.bank_account_name||x.full_name.toUpperCase(),x.bank_name||'',Math.round(num(l.net_pay)*100)/100)});
       if(hasRent&&fd.get('rent'))rows.push(row(rows.length+1,cf.rent_payee_ifsc,cf.rent_payee_account,cf.rent_payee_name,cf.rent_payee_bank||'',num(cf.rent_amount)));
-      if(!rows.length)throw new Error('File mein daalne ko kuch nahi hai');
+      if(!rows.length)throw new Error('Nothing to put in the file');
       const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),MONTHS[+payMonth.slice(5,7)-1].toUpperCase()+' '+payMonth.slice(0,4));
       if(cash.length)XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(cash.map((l,i)=>({'S.No.':i+1,'Name':(nm[l.staff_id]||{}).full_name,'Amount':num(l.net_pay)}))),'Cash');
-      XLSX.writeFile(wb,'AlKhair_HDFC_salary_'+payMonth+'.xlsx');closeModal();toast(rows.length+' payments ki file ban gayi')},{})};
+      XLSX.writeFile(wb,'AlKhair_HDFC_salary_'+payMonth+'.xlsx');closeModal();toast(rows.length+' payments in the file')},{})};
   const c=$('#pcsv');if(c)c.onclick=()=>csvDownload('salary-'+payMonth+'.csv',[['Name','Salary','Paid days','Half days','Earned','Half-day cut','Holdback','Adjustment','Net pay','Mode','Status']].concat(lines.map(l=>[(nm[l.staff_id]||{}).full_name,l.salary,l.paid_days,l.half_days,l.earned,l.half_day_cut,l.holdback,l.adjustment,l.net_pay,l.pay_mode||'',l.status])));
   $$('[data-pay]').forEach(b=>b.onclick=()=>{const l=lines.find(x=>x.id===b.dataset.pay);
     formModal('Mark paid: '+((nm[l.staff_id]||{}).full_name||''),'<p class="muted small">Net pay '+inr(l.net_pay)+'</p>'+inp('paid_on','Paid on',today(),'date','required')+sel('pay_mode','Mode',[['online','Online'],['cash','Cash']],l.pay_mode||'online'),'Save',async fd=>{
@@ -1142,7 +1142,7 @@ function staffFields(s){
    '<div class="row2">'+inp('joined_on','Joining date',s.joined_on,'date')+inp('monthly_salary','Monthly salary (₹)',s.monthly_salary,'number','min="0" step="100"')+'</div>'+
    '<div class="row2">'+inp('shift_start','Shift start',s.shift_start?String(s.shift_start).slice(0,5):'','time')+inp('shift_end','Shift end',s.shift_end?String(s.shift_end).slice(0,5):'','time')+'</div>'+
    '<div class="row2">'+inp('work_hours','Work hours per day',s.work_hours,'number','min="1" max="12" step="0.5"')+sel('pay_mode','Pay mode',[['','—'],['online','Online'],['cash','Cash']],s.pay_mode||'')+'</div>'+
-   inp('holdback_pct','Holdback % of salary',s.holdback_pct==null?0:s.holdback_pct,'number','min="0" max="100" step="1"','Salary ka itna % roka jata hai (sheet mein 10%).')+
+   inp('holdback_pct','Holdback % of salary',s.holdback_pct==null?0:s.holdback_pct,'number','min="0" max="100" step="1"','Percent of salary held back each month (10% in the salary sheet).')+
    '<div class="row2">'+inp('bank_account_no','Bank account number',s.bank_account_no,'text','inputmode="numeric"')+inp('bank_ifsc','IFSC',s.bank_ifsc,'text','maxlength="11" style="text-transform:uppercase"')+'</div>'+
    '<div class="row2">'+inp('bank_account_name','Name as in bank',s.bank_account_name)+inp('bank_name','Bank name',s.bank_name)+'</div>'+
    inp('address','Address',s.address)+
