@@ -374,7 +374,7 @@ const classByName=n=>S.classes.find(c=>c.name===n);
 const summaryRows=()=>all((a,b)=>sb.from('v_student_fee_summary').select('*').eq('academic_year_id',S.year.id).order('sort_order').order('full_name').range(a,b));
 
 /* ---------- routing ---------- */
-const NAV=[['dashboard','Dashboard'],['students','Students'],['documents','Documents'],['staff','Staff'],['academics','Academics'],['fees','Fees'],['accounts','Accounts'],['trends','Trends'],['import','Import']];
+const NAV=[['dashboard','Dashboard'],['students','Students'],['documents','Documents'],['staff','Staff'],['academics','Academics'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['trends','Trends'],['import','Import']];
 function currentRoute(){const h=location.hash.replace(/^#\/?/,'').split('/');return{name:h[0]||'dashboard',arg:h[1]?decodeURIComponent(h[1]):null}}
 async function route(){
   if(!S.user)return;
@@ -382,7 +382,7 @@ async function route(){
   if(S.user.user_metadata&&S.user.user_metadata.temp_password){$('#nav').innerHTML='';await vSetPassword(view);return}
   if(S.profile&&S.profile.role==='teacher'){$('#nav').innerHTML='<a href="#/me" aria-current="page">My attendance</a>';view.innerHTML='<p class="muted">Loading…</p>';try{await vMyAttendance(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
   $('#nav').innerHTML=NAV.map(n=>'<a href="#/'+n[0]+'"'+((r.name===n[0]||(r.name==='student'&&n[0]==='students'))?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');
-  const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,fees:vFees,accounts:vAccounts,trends:vTrends,import:vImport}[r.name]||vDashboard;
+  const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,fees:vFees,accounts:vAccounts,trends:vTrends,import:vImport}[r.name]||vDashboard;
   view.innerHTML='<p class="muted">Loading…</p>';
   try{await fn(view,r.arg);}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted" style="margin-top:6px">'+esc(errMsg(e))+'</p><p style="margin-top:10px"><button class="btn" onclick="route()">Try again</button></p></div>'}
   window.scrollTo(0,0);
@@ -415,9 +415,12 @@ async function vDashboard(el){
   if(noFee)alerts.push(['warn','Fees',noFee+' students have no fee set. Set the class fee structure in Fees, then apply it.']);
   if(dueStudents)alerts.push(['warn','Dues',dueStudents+' students have fee dues of '+inr(out)+' in total.']);
   if(missStudents)alerts.push(['warn','Documents',missStudents+' students have documents missing.']);
+  try{const pm=addMonth(today().slice(0,7),-1)+'-01',[pl,at,stf]=await Promise.all([q(sb.from('payroll_lines').select('status').eq('month',pm)),q(sb.from('staff_attendance').select('status').eq('work_date',today())),q(sb.from('staff').select('id').eq('status','active'))]);
+    const dr=pl.filter(l=>l.status==='draft').length;if(dr)alerts.push(['warn','Salary',monthLabel(pm.slice(0,7))+' ki salary ke '+dr+' staff abhi unpaid hain. Staff > Salary mein dekhiye.']);
+    if(stf.length)alerts.push(['neutral','Staff','Aaj '+at.filter(a=>['present','late','half_day'].includes(a.status)).length+' of '+stf.length+' staff school mein hain.'])}catch(e){}
   alerts.push([tied?'good':'bad','Books',tied?'Fee ledger and student balances agree.':'Fee ledger differs from student balances by '+inr(ck.difference)+'. Check Accounts.']);
   if(F.fc.length){const lo=F.fc.slice().sort((a,b)=>a.y-b.y)[0];alerts.push(['neutral','Forecast','Lowest expected collection ahead: '+monthLabel(lo.m)+', about '+inr(lo.y)+'.'])}
-  el.innerHTML=head('Dashboard','Session '+S.year.label)+
+  el.innerHTML=head('Dashboard','Session '+S.year.label,'<button class="btn ghost" id="bkup">Backup (Excel)</button>')+
    '<div class="kpis">'+kpi('Students',rows.length,'Enrolled in '+S.year.label)+kpi('Fees due this session',inr(billed),'After discounts, with previous dues')+kpi('Collected',inr(paid),(billed?Math.round(paid/billed*100):0)+'% of fees due')+kpi('Outstanding',inr(out),dueStudents+' students with dues')+'</div>'+
    '<div class="grid2"><div class="card"><div class="card-head"><div><h2>Fee collection by month</h2><p class="muted small">Actual collection and the next 6 months.</p></div>'+legendHTML+'</div>'+lineChart(series,F.fc,'Monthly fee collection and forecast')+'<p class="muted small" style="margin-top:6px">'+esc(F.note||'')+'</p></div>'+
    '<div class="card"><h2 style="margin-bottom:6px">Needs attention</h2><ul class="list">'+alerts.map(a=>'<li><span class="pill '+a[0]+'">'+esc(a[1])+'</span><div>'+esc(a[2])+'</div></li>').join('')+'</ul></div></div>'+
@@ -880,6 +883,48 @@ async function staffBase(){
 }
 const isOff=(cfg,holSet,ds)=>{const d=new Date(ds+'T00:00:00');return (cfg.weekly_off||[]).includes(d.getDay())?'Weekly off':(holSet[ds]||null)};
 
+const BACKUP_TABLES=['academic_years','classes','sections','students','enrollments','student_documents','fee_heads','fee_structure','fee_assessments','fee_discounts','fee_opening_balances','payments','accounts','journal_entries','journal_lines','cash_transactions','staff','staff_attendance','school_holidays','payroll_lines','subjects','class_subjects','exams','marks','school_settings'];
+async function backupAll(btn){
+  const old=btn.textContent;btn.disabled=true;btn.textContent='Backup ban raha hai...';
+  try{const wb=XLSX.utils.book_new();
+    for(const t of BACKUP_TABLES){const rows=await all((a,b)=>sb.from(t).select('*').range(a,b));XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows.length?rows:[{}]),t.slice(0,31))}
+    XLSX.writeFile(wb,'AlKhair_ERP_backup_'+today()+'.xlsx');toast('Backup download ho gaya')}
+  catch(e){toast(errMsg(e),true)}finally{btn.disabled=false;btn.textContent=old}
+}
+document.addEventListener('click',e=>{const b=e.target.closest&&e.target.closest('#bkup');if(b)backupAll(b)});
+
+/* ---------- Reminders: fee and document messages (WhatsApp links, no API needed) ---------- */
+let remTab='fees',remCls='all',remMin=1;
+const REM_FEES="Assalamu Alaikum {parent},\nAl-Khair Academy ki taraf se yaad-dehani: {student} (Class {class}) ki ₹{due} fees baaki hai. Aap apni suvidha ke anusaar jama karwa dein. Shukriya.\n- Al-Khair Academy";
+const REM_DOCS="Assalamu Alaikum {parent},\nAl-Khair Academy ki taraf se: {student} (Class {class}) ke ye documents abhi baaki hain: {docs}. Kripya jald school mein jama karwa dein. Shukriya.\n- Al-Khair Academy";
+const waLink=(m,text)=>{let d=String(m||'').replace(/\D/g,'').slice(-10);return d.length===10?'https://wa.me/91'+d+'?text='+encodeURIComponent(text):null};
+const fillTpl=(t,o)=>t.replace(/\{(\w+)\}/g,(_,k)=>o[k]!=null?o[k]:'');
+async function vReminders(el){
+  const [rows,ids,md]=await Promise.all([summaryRows(),all((a,b)=>sb.from('v_student_id_status').select('*').range(a,b)),all((a,b)=>sb.from('v_student_missing_documents').select('student_id,document_name').range(a,b))]);
+  const st=Object.fromEntries(ids.map(r=>[r.student_id,r]));
+  let tpl;try{tpl=localStorage.getItem('remTpl_'+remTab)}catch(e){}tpl=tpl||(remTab==='fees'?REM_FEES:REM_DOCS);
+  let list;
+  if(remTab==='fees'){
+    list=rows.filter(r=>num(r.balance)>=remMin&&(remCls==='all'||r.class_name===remCls)).sort((a,b)=>num(b.balance)-num(a.balance)).map(r=>{const x=st[r.student_id]||{};return{id:r.student_id,name:r.full_name,cls:r.class_name,parent:x.father_name||'Parent',mobile:x.guardian_mobile,amt:num(r.balance),vars:{student:r.full_name,class:r.class_name,parent:x.father_name||'Parent',due:Math.round(num(r.balance)).toLocaleString('en-IN')}}});
+  }else{
+    const by={};md.forEach(m=>{(by[m.student_id]=by[m.student_id]||[]).push(m.document_name)});
+    list=ids.filter(r=>remCls==='all'||r.class_name===remCls).map(r=>{const d=(by[r.student_id]||[]).concat(IDS.filter(([k])=>idMiss(r,k)).map(([,n])=>n));return{id:r.student_id,name:r.full_name,cls:r.class_name,parent:r.father_name||'Parent',mobile:r.guardian_mobile,docs:d,vars:{student:r.full_name,class:r.class_name,parent:r.father_name||'Parent',docs:d.join(', ')}}}).filter(x=>x.docs.length).sort((a,b)=>b.docs.length-a.docs.length);
+  }
+  const msg=x=>fillTpl(tpl,x.vars),noNum=list.filter(x=>!waLink(x.mobile,'x')).length;
+  el.innerHTML=head('Reminders','Message taiyaar, WhatsApp pe ek click mein bhejiye')+
+   '<div class="seg" role="group" style="justify-self:start">'+[['fees','Fees dues'],['docs','Documents']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(remTab===t[0])+'">'+t[1]+'</button>').join('')+'</div>'+
+   '<div class="card" style="margin-top:12px"><div class="row2" style="align-items:end">'+sel('rcls','Class',[['all','All classes']].concat(S.classes.map(c=>[c.name,c.name])),remCls)+(remTab==='fees'?inp('rmin','Kam se kam baaki (₹)',remMin,'number','min="1" step="100"'):'')+'</div>'+
+   '<div class="field"><label for="rtpl">Message (badal sakte hain; {parent} {student} {class} '+(remTab==='fees'?'{due}':'{docs}')+')</label><textarea class="input" id="rtpl" rows="4">'+esc(tpl)+'</textarea></div></div>'+
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>'+list.length+' students'+(remTab==='fees'?' · '+inr(sum(list.map(x=>x.amt))):'')+'</h2><button class="btn ghost sm" id="rcsv">Download list</button></div>'+(noNum?'<p class="muted small">'+noNum+' students ka mobile number nahi hai ya galat hai.</p>':'')+
+   '<div class="tablewrap"><table><thead><tr><th>Name</th><th>Class</th><th>Parent</th>'+(remTab==='fees'?'<th class="r">Baaki</th>':'<th>Baaki documents</th>')+'<th></th></tr></thead><tbody>'+
+   list.map(x=>{const l=waLink(x.mobile,msg(x));return'<tr><td>'+esc(x.name)+'</td><td class="nowrap">'+esc(x.cls)+'</td><td>'+esc(x.parent)+'</td><td'+(remTab==='fees'?' class="r"><b>'+inr(x.amt)+'</b>':'>'+esc(x.docs.join(', ')))+'</td><td class="r nowrap">'+(l?'<a class="btn ghost sm" target="_blank" rel="noopener" href="'+l+'">WhatsApp</a>':'<span class="muted small">no number</span>')+'</td></tr>'}).join('')+'</tbody></table></div></div>';
+  $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{remTab=b.dataset.t;vReminders(el)});
+  $('#rcls').onchange=e=>{remCls=e.target.value;vReminders(el)};
+  if($('#rmin'))$('#rmin').onchange=e=>{remMin=Math.max(1,Number(e.target.value)||1);vReminders(el)};
+  $('#rtpl').onchange=e=>{try{localStorage.setItem('remTpl_'+remTab,e.target.value)}catch(x){}vReminders(el)};
+  $('#rcsv').onclick=()=>csvDownload('reminders-'+remTab+'.csv',[['Name','Class','Parent','Mobile',remTab==='fees'?'Due':'Missing','Message']].concat(list.map(x=>[x.name,x.cls,x.parent,x.mobile||'',remTab==='fees'?x.amt:x.docs.join('; '),msg(x)])));
+}
+
 /* ---------- Academics: exams, marks entry, results, subject setup ---------- */
 let acTab='marks',acSel={cls:'',exam:'',subj:''};
 async function acBase(){
@@ -964,7 +1009,8 @@ async function vStaff(el){
 let payMonth=addMonth(today().slice(0,7),-1);
 async function stPay(box,B){
   const d0=payMonth+'-01';
-  const lines=await q(sb.from('payroll_lines').select('*').eq('month',d0));
+  let lines=await q(sb.from('payroll_lines').select('*').eq('month',d0));
+  if(!lines.length&&payMonth===addMonth(today().slice(0,7),-1)&&B.staff.some(x=>x.status==='active'&&x.monthly_salary)){try{await rpc('payroll_generate',{p_month:d0});lines=await q(sb.from('payroll_lines').select('*').eq('month',d0))}catch(e){}}
   const nm=Object.fromEntries(B.staff.map(s=>[s.id,s]));
   const drafts=lines.filter(l=>l.status==='draft'),paid=lines.filter(l=>l.status==='paid');
   const tot=a=>a.reduce((x,l)=>x+num(l.net_pay),0);

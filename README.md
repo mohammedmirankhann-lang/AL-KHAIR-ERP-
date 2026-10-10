@@ -1,3 +1,33 @@
 # Al Khair Academy ERP
 
-Static web app (index.html) on Vercel, database on Supabase. Migrations in supabase/migrations.
+Owner-run school ERP for Al Khair Academy, Indore (MP board, Nursery to 8th).
+
+## How it is built
+- **App:** one static file, `index.html` (plain JavaScript). Hosted on Vercel project `al-khair-erp-2`. Every push to `main` deploys automatically.
+- **Database and login:** Supabase project `al-khair-erp` (Mumbai, `wwfjiatnolndvggbviub`). The app talks to it directly; access is controlled by row-level security. Only the owner role can change data.
+- **Staff login:** Supabase Edge Function `staff-login` (owner only) creates teacher logins from a mobile number. Its notes are in `supabase/functions/staff-login/README.md`.
+- **Database history:** every schema change is in `supabase/migrations/` in order (1 to 11).
+
+## What it does today
+Students, fees and receipts, documents checklist (PEN, APAAR, Aadhaar, Samagra), accounts (double entry, P&L, balance sheet), trends, staff and geofence attendance, payroll (calculation, holdback, HDFC bulk file, posting to books), academics (PT1, Term 1, PT2, Term 2 marks and results), reminders (fees and documents, WhatsApp links), backup to Excel.
+
+## Rules built in
+- Fees: 70% tuition, remaining 30% split equally into Exam, Activity, Computer.
+- Salary: per day = salary / days in month. Sundays and holidays are paid. Leave and absence are unpaid. Half day cuts 3 hours. Holdback (10% for flagged staff) is kept every month and paid in April of the next session.
+- Books: journal entries cannot be edited or deleted; corrections are made by reversal. Salary and rent are dated the last day of their month.
+
+## Saving your work (three layers)
+1. **Code:** this GitHub repository.
+2. **Data:** Supabase database. Use the **Backup (Excel)** button on the Dashboard at least once a week, and keep the file in Google Drive. Supabase Pro adds daily automatic backups and is recommended.
+3. **Notes and decisions:** this README and the project memory.
+
+## Going live checklist
+- Owner login works (alkhair.indore176@gmail.com). Keep the password safe; set up a second owner or recovery email.
+- Supabase Auth: turn off public sign-ups, turn on leaked-password protection.
+- Set the school location in Staff > Settings before teachers punch.
+- Take a first Backup.
+- Move to Supabase Pro.
+- Optional: own web address (for example erp.alkhairacademy.in) in Vercel project settings > Domains.
+
+## Not built yet
+Teacher logins with class assignment, student attendance, report cards, grades, AI summaries, WhatsApp sending through the official API.
