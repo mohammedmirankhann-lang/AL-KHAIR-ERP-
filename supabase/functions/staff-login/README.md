@@ -1,3 +1,4 @@
-Edge function `staff-login` (deployed on Supabase, verify_jwt on).
-Owner-only. Creates a teacher login (mobile or email + random temporary password shown once) or resets it.
-Source lives in the Supabase project; redeploy with the Supabase CLI or dashboard if it needs changing.
+# staff-login (Supabase Edge Function)
+
+Owner-only. Actions: `create` (login ID = staff code, e.g. AKA1, shown to the teacher as "AKA1"), `reset` (new temporary password), `disable` / `enable` (block or allow sign-in; records are kept).
+Staff codes belong to a person and are never reused. Source: `index.ts` (deployed as version 2).

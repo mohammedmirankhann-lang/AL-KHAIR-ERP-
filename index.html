@@ -915,7 +915,7 @@ async function vOldDues(el){
 async function stWork(box,B,active){
   const m0=staffMonth+'-01',last=new Date(+staffMonth.slice(0,4),+staffMonth.slice(5,7),0).getDate(),m1=staffMonth+'-'+String(last).padStart(2,'0');
   const [asg,att,enr,sa,mk,sub]=await Promise.all([
-    q(sb.from('teacher_assignments').select('*')),
+    q(sb.from('teacher_assignments').select('*').eq('academic_year_id',S.year.id)),
     q(sb.from('staff_attendance').select('staff_id,status').gte('work_date',m0).lte('work_date',m1)),
     all((a,b)=>sb.from('enrollments').select('id,class_id').eq('academic_year_id',S.year.id).range(a,b)),
     all((a,b)=>sb.from('student_attendance').select('enrollment_id,att_date,marked_by').gte('att_date',m0).lte('att_date',m1).range(a,b)),
@@ -945,7 +945,7 @@ async function acAttendance(box,B){
   const [en,at,asg,stf]=await Promise.all([
     all((a,b)=>sb.from('enrollments').select('id,class_id,roll_no,students(full_name,admission_no)').eq('academic_year_id',S.year.id).range(a,b)),
     q(sb.from('student_attendance').select('enrollment_id,status,marked_by,updated_at').eq('att_date',acDate)),
-    q(sb.from('teacher_assignments').select('class_id,staff_id').eq('is_class_teacher',true)),
+    q(sb.from('teacher_assignments').select('class_id,staff_id').eq('is_class_teacher',true).eq('academic_year_id',S.year.id)),
     q(sb.from('staff').select('id,full_name'))]);
   const sNm=Object.fromEntries(stf.map(x=>[x.id,x.full_name])),by=Object.fromEntries(at.map(a=>[a.enrollment_id,a]));
   const rows=S.classes.map(c=>{const es=en.filter(e=>e.class_id===c.id),m=es.filter(e=>by[e.id]),cnt=k=>m.filter(e=>by[e.id].status===k).length;return{c,es,n:es.length,m:m.length,p:cnt('present'),a:cnt('absent'),l:cnt('late'),v:cnt('leave'),ct:asg.filter(x=>x.class_id===c.id).map(x=>sNm[x.staff_id]).filter(Boolean).join(', ')}});
@@ -965,7 +965,7 @@ async function acProgress(box,B){
     all((a,b)=>sb.from('enrollments').select('id,class_id').eq('academic_year_id',S.year.id).range(a,b)),
     all((a,b)=>sb.from('marks').select('enrollment_id,subject_id,entered_by,updated_at').eq('exam_id',ex.id).range(a,b)),
     q(sb.from('marks_submissions').select('*').eq('exam_id',ex.id)),
-    q(sb.from('teacher_assignments').select('class_id,subject_id,staff_id').not('subject_id','is',null)),
+    q(sb.from('teacher_assignments').select('class_id,subject_id,staff_id').not('subject_id','is',null).eq('academic_year_id',S.year.id)),
     q(sb.from('staff').select('id,full_name'))]);
   const sNm=Object.fromEntries(stf.map(x=>[x.id,x.full_name])),clsOf=Object.fromEntries(en.map(e=>[e.id,e.class_id]));
   const cnt={};mk.forEach(m=>{const k=clsOf[m.enrollment_id]+'|'+m.subject_id;cnt[k]=(cnt[k]||0)+1});
@@ -1108,14 +1108,15 @@ async function acResults(box,B){
   $('#acX').onclick=()=>{const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows.map(r=>{const o={Roll:r.e.roll_no,Adm:r.e.students.admission_no,Name:r.e.students.full_name};subs.forEach(sj=>{const m=by[r.e.id+'|'+sj.id];o[sj.name]=m?(m.absent?'AB':m.marks):''});o.Total=r.t;o.Max=r.mx;o.Percent=r.pct;return o})),'Results');XLSX.writeFile(wb,'AlKhair_'+ex.short_name+'_'+(S.classes.find(c=>c.id===acSel.cls)||{}).name+'.xlsx')};
 }
 async function acSetup(box,B){
-  const [asg,stf]=await Promise.all([q(sb.from('teacher_assignments').select('*')),q(sb.from('staff').select('id,full_name,user_id,status').eq('status','active').order('full_name'))]);
+  const [asg,stf]=await Promise.all([q(sb.from('teacher_assignments').select('*').eq('academic_year_id',S.year.id)),q(sb.from('staff').select('id,full_name,user_id,status').eq('status','active').order('full_name'))]);
   const sNm=Object.fromEntries(stf.map(x=>[x.id,x])),cNm=id=>(classById(id)||{}).name||'',jNm=id=>(B.subjects.find(x=>x.id===id)||{}).name||'';
   box.innerHTML='<div class="card"><div class="card-head"><h2>Subjects per class</h2></div><p class="muted small" style="margin-bottom:8px">Starter subjects have been added. Please check and correct them.</p><div class="tablewrap"><table><thead><tr><th>Class</th>'+B.subjects.map(x=>'<th class="r">'+esc(x.name)+'</th>').join('')+'</tr></thead><tbody>'+
    S.classes.map(c=>'<tr><td class="nowrap">'+esc(c.name)+'</td>'+B.subjects.map(x=>'<td class="r"><input type="checkbox" data-c="'+c.id+'" data-s="'+x.id+'"'+(B.cs.some(y=>y.class_id===c.id&&y.subject_id===x.id)?' checked':'')+'></td>').join('')+'</tr>').join('')+'</tbody></table></div><div class="toolbar" style="margin-top:10px"><button class="btn ghost" id="acAdd">Add subject</button></div></div>'+
    '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Exams and default max marks</h2></div>'+B.exams.map(e=>'<div class="row2" style="align-items:end;margin-bottom:6px"><div><b>'+esc(e.name)+'</b></div><label class="small">Max marks <input class="input" type="number" min="1" step="0.5" data-ex="'+e.id+'" value="'+e.default_max+'" style="width:90px;display:inline-block"></label></div>').join('')+'</div>'+
-   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Teacher assignments</h2><button class="btn" id="asAdd">Assign teacher</button></div><p class="muted small" style="margin-bottom:8px">A class teacher marks daily attendance for the class. A subject teacher enters marks for that class and subject. Teachers see only what is assigned here. A teacher can log in once you create a login in Staff &gt; Staff list.</p>'+
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Teacher assignments · '+esc(S.year.label)+'</h2><div class="toolbar">'+(S.years.length>1?'<button class="btn ghost" id="asCopy">Copy from previous session</button>':'')+'<button class="btn" id="asAdd">Assign teacher</button></div></div><p class="muted small" style="margin-bottom:8px">A class teacher marks daily attendance for the class. A subject teacher enters marks for that class and subject. Teachers see only what is assigned here. A teacher can log in once you create a login in Staff &gt; Staff list.</p>'+
    (asg.length?'<div class="tablewrap"><table><thead><tr><th>Teacher</th><th>Class</th><th>Role</th><th>Login</th><th></th></tr></thead><tbody>'+asg.sort((a,b)=>(((sNm[a.staff_id]||{}).full_name)||'').localeCompare(((sNm[b.staff_id]||{}).full_name)||'')).map(a=>{const t=sNm[a.staff_id]||{};return'<tr><td>'+esc(t.full_name||'(left school)')+'</td><td>'+esc(cNm(a.class_id))+'</td><td>'+(a.is_class_teacher?'Class teacher':esc(jNm(a.subject_id))+' teacher')+'</td><td>'+(t.user_id?'<span class="pill good">Created</span>':'<span class="pill warn">No login yet</span>')+'</td><td class="r"><button class="btn ghost sm" data-ad="'+a.id+'">Remove</button></td></tr>'}).join('')+'</tbody></table></div>':'<p class="muted">No teachers assigned yet.</p>')+'</div>';
-  $('#asAdd').onclick=()=>formModal('Assign teacher',sel('staff_id','Teacher',stf.map(x=>[x.id,x.full_name]),'')+sel('class_id','Class',S.classes.map(c=>[c.id,c.name]),'')+sel('role','Role',[['ct','Class teacher (daily attendance)']].concat(B.subjects.map(x=>[x.id,x.name+' teacher (marks)'])),'ct'),'Assign',async fd=>{const role=fd.get('role'),row={staff_id:fd.get('staff_id'),class_id:fd.get('class_id'),is_class_teacher:role==='ct',subject_id:role==='ct'?null:role};await q(sb.from('teacher_assignments').insert(row));closeModal();toast('Assigned');vAcademics($('#view'))},{});
+  $('#asAdd').onclick=()=>formModal('Assign teacher',sel('staff_id','Teacher',stf.map(x=>[x.id,x.full_name]),'')+sel('class_id','Class',S.classes.map(c=>[c.id,c.name]),'')+sel('role','Role',[['ct','Class teacher (daily attendance)']].concat(B.subjects.map(x=>[x.id,x.name+' teacher (marks)'])),'ct'),'Assign',async fd=>{const role=fd.get('role'),row={academic_year_id:S.year.id,staff_id:fd.get('staff_id'),class_id:fd.get('class_id'),is_class_teacher:role==='ct',subject_id:role==='ct'?null:role};await q(sb.from('teacher_assignments').insert(row));closeModal();toast('Assigned');vAcademics($('#view'))},{});
+  if($('#asCopy'))$('#asCopy').onclick=()=>{const prev=S.years.filter(y=>y.id!==S.year.id).sort((a,b)=>String(b.starts_on).localeCompare(String(a.starts_on)));formModal('Copy assignments',sel('py','Copy from',prev.map(y=>[y.id,y.label]),prev[0]&&prev[0].id)+'<p class="muted small">Teachers who have left are skipped. Existing assignments here are kept.</p>','Copy',async fd=>{const old=await q(sb.from('teacher_assignments').select('staff_id,class_id,subject_id,is_class_teacher').eq('academic_year_id',fd.get('py')));const ok=new Set(stf.map(x=>x.id));const rows=old.filter(a=>ok.has(a.staff_id)).map(a=>({...a,academic_year_id:S.year.id}));if(!rows.length)throw new Error('Nothing to copy');await q(sb.from('teacher_assignments').upsert(rows,{onConflict:'academic_year_id,staff_id,class_id,subject_id,is_class_teacher',ignoreDuplicates:true}));closeModal();toast(rows.length+' assignments copied');vAcademics($('#view'))},{})};
   $$('[data-ad]').forEach(b=>b.onclick=async()=>{try{await q(sb.from('teacher_assignments').delete().eq('id',b.dataset.ad));toast('Removed');vAcademics($('#view'))}catch(e){toast(errMsg(e),true)}});
   $$('input[data-c]').forEach(i=>i.onchange=async()=>{try{if(i.checked)await q(sb.from('class_subjects').upsert({class_id:i.dataset.c,subject_id:i.dataset.s}));else await q(sb.from('class_subjects').delete().eq('class_id',i.dataset.c).eq('subject_id',i.dataset.s));toast('Saved')}catch(e){toast(errMsg(e),true);i.checked=!i.checked}});
   $$('input[data-ex]').forEach(i=>i.onchange=async()=>{try{await q(sb.from('exams').update({default_max:Number(i.value)}).eq('id',i.dataset.ex));toast('Saved')}catch(e){toast(errMsg(e),true)}});
@@ -1250,7 +1251,7 @@ async function stMonth(box,B,active){
 
 function staffFields(s){
   s=s||{};
-  return '<div class="row2">'+inp('full_name','Full name',s.full_name,'text','required')+inp('staff_code','Staff code',s.staff_code,'text','','Optional, e.g. T01')+'</div>'+
+  return '<div class="row2">'+inp('full_name','Full name',s.full_name,'text','required')+inp('staff_code','Staff code (login ID)',s.staff_code,'text','style="text-transform:uppercase"','Like AKA1. Never reuse a code for another person.')+'</div>'+
    '<div class="row2">'+inp('designation','Designation',s.designation,'text','','Teacher, Principal, Peon...')+inp('subjects','Subjects',s.subjects)+'</div>'+
    '<div class="row2">'+inp('classes_taught','Classes',s.classes_taught,'text','','e.g. Class 3 to 5')+inp('qualification','Qualification',s.qualification)+'</div>'+
    '<div class="row2">'+inp('phone','Mobile',s.phone,'tel','','10 digits. Used as login for the teacher')+inp('email','Email',s.email,'email')+'</div>'+
@@ -1287,8 +1288,10 @@ function stDir(box,B){
   $('#sfile').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{await staffImport(f);toast('Staff imported');again()}catch(err){toast(errMsg(err),true)}};
 }
 function staffModal(s,again){
-  const sheet=formModal(s.full_name,staffFields(s)+'<div class="card" style="background:var(--surface2)"><b>Teacher login</b><p class="muted small" style="margin:4px 0 8px">'+(s.user_id?'Login created. Teacher signs in with '+esc(s.login_id&&s.login_id.endsWith('@staff.alkhair.in')?'mobile '+(s.phone||''):(s.login_id||''))+'.':'Teacher signs in with mobile number (or email) and a temporary password that you hand over. They must set their own password at first sign in.')+'</p><div id="lgout"></div><div class="toolbar">'+(s.user_id?'<button type="button" class="btn ghost sm" id="lgreset">Reset password</button><button type="button" class="btn ghost sm" id="lgoff">'+'Block / unblock login</button>':'<button type="button" class="btn sm" id="lgmake">Create login</button>')+'</div></div>','Save',async fd=>{
-    await q(sb.from('staff').update(staffPayload(fd)).eq('id',s.id));closeModal();toast('Saved');again()},{wide:true});
+  const sheet=formModal(s.full_name,staffFields(s)+'<div class="card" style="background:var(--surface2)"><b>Teacher login</b><p class="muted small" style="margin:4px 0 8px">'+(s.user_id?'Login created. Teacher signs in with '+esc(s.login_id&&s.login_id.endsWith('@staff.alkhair.in')?'staff code '+String(s.login_id).split('@')[0].toUpperCase():(s.login_id||''))+'.':'Teacher signs in with the staff code ('+esc(s.staff_code||'set a staff code above first')+') and a temporary password that you hand over. They must set their own password at first sign in. Codes belong to the person and are never reused.')+'</p><div id="lgout"></div><div class="toolbar">'+(s.user_id?'<button type="button" class="btn ghost sm" id="lgreset">Reset password</button><button type="button" class="btn ghost sm" id="lgoff">'+'Block / unblock login</button>':'<button type="button" class="btn sm" id="lgmake">Create login</button>')+'</div></div>','Save',async fd=>{
+    const pl=staffPayload(fd);if(pl.staff_code)pl.staff_code=pl.staff_code.toUpperCase();await q(sb.from('staff').update(pl).eq('id',s.id));
+    if(s.user_id&&pl.status!==s.status){try{await sb.functions.invoke('staff-login',{body:{action:pl.status==='left'?'disable':'enable',staff_id:s.id}});toast(pl.status==='left'?'Saved. Login blocked because the staff member left.':'Saved. Login enabled.')}catch(e){toast('Saved, but the login could not be updated: '+errMsg(e),true)}}else toast('Saved');
+    closeModal();again()},{wide:true});
   const call=async action=>{
     const out=$('#lgout');out.innerHTML='<p class="muted small">Working…</p>';
     try{
@@ -1300,7 +1303,7 @@ function staffModal(s,again){
     }catch(e){out.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}};
   if($('#lgmake'))$('#lgmake').onclick=()=>call('create');
   if($('#lgreset'))$('#lgreset').onclick=()=>call('reset');
-  if($('#lgoff'))$('#lgoff').onclick=async()=>{try{const p=await q(sb.from('profiles').select('is_active').eq('id',s.user_id).single());await q(sb.from('profiles').update({is_active:!p.is_active}).eq('id',s.user_id));$('#lgout').innerHTML='<p class="small"><b>Login is now '+(!p.is_active?'active':'blocked')+'.</b></p>'}catch(e){$('#lgout').innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}};
+  if($('#lgoff'))$('#lgoff').onclick=async()=>{try{const p=await q(sb.from('profiles').select('is_active').eq('id',s.user_id).single());const {data,error}=await sb.functions.invoke('staff-login',{body:{action:p.is_active?'disable':'enable',staff_id:s.id}});if(error||(data&&data.error))throw new Error((data&&data.error)||error.message);$('#lgout').innerHTML='<p class="small"><b>Login is now '+(p.is_active?'blocked':'active')+'.</b></p>'}catch(e){$('#lgout').innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}};
 }
 async function staffImport(file){
   if(typeof XLSX==='undefined')throw new Error('The spreadsheet reader could not load. Reload and try again.');
@@ -1403,7 +1406,7 @@ async function startApp(session){
 }
 $('#loginForm').addEventListener('submit',async e=>{
   e.preventDefault();const b=$('#lbtn');b.disabled=true;$('#lerr').textContent='';
-  const {data,error}=await sb.auth.signInWithPassword({email:(()=>{const v=$('#lemail').value.trim();return v.includes('@')?v:v.replace(/\D/g,'').slice(-10)+'@staff.alkhair.in'})(),password:$('#lpass').value});
+  const {data,error}=await sb.auth.signInWithPassword({email:(()=>{const v=$('#lemail').value.trim();return v.includes('@')?v:/^[A-Za-z]{2,6}\d{1,5}$/.test(v)?v.toLowerCase()+'@staff.alkhair.in':v.replace(/\D/g,'').slice(-10)+'@staff.alkhair.in'})(),password:$('#lpass').value});
   b.disabled=false;
   if(error){$('#lerr').textContent=/invalid/i.test(error.message)?'Email, mobile or password is not correct.':error.message;return}
   $('#lpass').value='';await startApp(data.session);
