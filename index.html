@@ -885,15 +885,42 @@ async function vStaff(el){
   const active=B.staff.filter(s=>s.status==='active');
   el.innerHTML=head('Staff',active.length+' active staff'+(B.cfg.geo_lat==null?' · school location not set':''),'')+
    (B.cfg.geo_lat==null?'<p class="banner" style="margin-bottom:12px">Set the school location in the Settings tab first. Teachers can punch only after that.</p>':'')+
-   '<div class="seg" role="group" aria-label="Staff view" style="justify-self:start;max-width:100%;overflow-x:auto">'+[['today','Today'],['month','Monthly'],['dir','Staff list'],['set','Settings']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(staffTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="sbody" style="margin-top:14px;min-width:0;max-width:100%"></div>';
+   '<div class="seg" role="group" aria-label="Staff view" style="justify-self:start;max-width:100%;overflow-x:auto">'+[['today','Today'],['month','Monthly'],['pay','Salary'],['dir','Staff list'],['set','Settings']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(staffTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="sbody" style="margin-top:14px;min-width:0;max-width:100%"></div>';
   $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{staffTab=b.dataset.t;vStaff(el)});
   const box=$('#sbody');
   try{
     if(staffTab==='today')await stToday(box,B,active);
     else if(staffTab==='month')await stMonth(box,B,active);
+    else if(staffTab==='pay')await stPay(box,B);
     else if(staffTab==='dir')stDir(box,B);
     else stSettings(box,B);
   }catch(e){box.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}
+}
+
+let payMonth=addMonth(today().slice(0,7),-1);
+async function stPay(box,B){
+  const d0=payMonth+'-01';
+  const lines=await q(sb.from('payroll_lines').select('*').eq('month',d0));
+  const nm=Object.fromEntries(B.staff.map(s=>[s.id,s]));
+  const drafts=lines.filter(l=>l.status==='draft'),paid=lines.filter(l=>l.status==='paid');
+  const tot=a=>a.reduce((x,l)=>x+num(l.net_pay),0);
+  const prev=await q(sb.from('payroll_lines').select('month,net_pay,status'));
+  const byM={};prev.forEach(l=>{const k=String(l.month).slice(0,7);byM[k]=(byM[k]||0)+num(l.net_pay)});
+  const mk=Object.keys(byM).sort();
+  box.innerHTML='<div class="toolbar" style="margin-bottom:10px;gap:8px"><button class="btn ghost sm" id="pp">‹</button><b style="min-width:70px;text-align:center">'+monthLabel(payMonth)+'</b><button class="btn ghost sm" id="pn">›</button>'+
+   '<button class="btn" id="pgen">'+(lines.length?'Recalculate drafts':'Calculate salary')+'</button>'+(lines.length?'<button class="btn ghost" id="pcsv">Download</button>':'')+'</div>'+
+   '<div class="kpis">'+kpi('Total payable',inr(tot(lines)),lines.length+' staff')+kpi('Paid',inr(tot(paid)),paid.length+' staff')+kpi('Pending',inr(tot(drafts)),drafts.length+' staff')+kpi('Online / Cash',inr(tot(lines.filter(l=>l.pay_mode==='online')))+' / '+inr(tot(lines.filter(l=>l.pay_mode==='cash'))),'by pay mode')+'</div>'+
+   '<div class="card"><div class="card-head"><h2>Salary '+monthLabel(payMonth)+'</h2></div>'+
+   (lines.length?'<div class="tablewrap"><table><thead><tr><th>Name</th><th class="r">Salary</th><th class="r">Paid days</th><th class="r">Half</th><th class="r">Earned</th><th class="r">Cut</th><th class="r">Holdback</th><th class="r">Adj.</th><th class="r">Net pay</th><th>Mode</th><th>Status</th><th></th></tr></thead><tbody>'+
+    lines.sort((a,b)=>((nm[a.staff_id]||{}).full_name||'').localeCompare((nm[b.staff_id]||{}).full_name||'')).map(l=>'<tr><td>'+esc((nm[l.staff_id]||{}).full_name||'')+'</td><td class="r">'+inr(l.salary)+'</td><td class="r">'+l.paid_days+'/'+l.days_in_month+'</td><td class="r">'+(l.half_days||'')+'</td><td class="r">'+inr(l.earned)+'</td><td class="r">'+(num(l.half_day_cut)?inr(l.half_day_cut):'')+'</td><td class="r">'+(num(l.holdback)?inr(l.holdback):'')+'</td><td class="r" title="'+esc(l.adjustment_note||'')+'">'+(num(l.adjustment)?inr(l.adjustment):'')+'</td><td class="r"><b>'+inr(l.net_pay)+'</b></td><td>'+esc(l.pay_mode||'')+'</td><td>'+(l.status==='paid'?'<span class="pill good">Paid'+(l.paid_on?' '+fmtDate(l.paid_on):'')+'</span>':'<span class="pill neutral">Draft</span>')+'</td><td class="r nowrap">'+(l.status==='draft'?'<button class="btn ghost sm" data-pay="'+l.id+'">Mark paid</button>':'')+'</td></tr>').join('')+'</tbody></table></div>':'<p class="muted">Is mahine ki salary abhi calculate nahi hui. "Calculate salary" dabaiye: attendance, holidays aur half-day se hisab ban jayega.</p>')+'</div>'+
+   (mk.length?'<div class="card" style="margin-top:12px"><div class="card-head"><h2>Month-wise salary</h2></div><div class="tablewrap"><table><thead><tr><th>Month</th><th class="r">Total net pay</th></tr></thead><tbody>'+mk.map(k=>'<tr><td>'+monthLabel(k)+'</td><td class="r">'+inr(byM[k])+'</td></tr>').join('')+'</tbody></table></div></div>':'');
+  $('#pp').onclick=()=>{payMonth=addMonth(payMonth,-1);vStaff($('#view'))};
+  $('#pn').onclick=()=>{payMonth=addMonth(payMonth,1);vStaff($('#view'))};
+  $('#pgen').onclick=async()=>{try{await rpc('payroll_generate',{p_month:d0});toast('Salary calculated');vStaff($('#view'))}catch(e){toast(errMsg(e),true)}};
+  const c=$('#pcsv');if(c)c.onclick=()=>csvDownload('salary-'+payMonth+'.csv',[['Name','Salary','Paid days','Half days','Earned','Half-day cut','Holdback','Adjustment','Net pay','Mode','Status']].concat(lines.map(l=>[(nm[l.staff_id]||{}).full_name,l.salary,l.paid_days,l.half_days,l.earned,l.half_day_cut,l.holdback,l.adjustment,l.net_pay,l.pay_mode||'',l.status])));
+  $$('[data-pay]').forEach(b=>b.onclick=()=>{const l=lines.find(x=>x.id===b.dataset.pay);
+    formModal('Mark paid: '+((nm[l.staff_id]||{}).full_name||''),'<p class="muted small">Net pay '+inr(l.net_pay)+'</p>'+inp('paid_on','Paid on',today(),'date','required')+sel('pay_mode','Mode',[['online','Online'],['cash','Cash']],l.pay_mode||'online'),'Save',async fd=>{
+      await rpc('payroll_mark_paid',{p_line:l.id,p_paid_on:fd.get('paid_on'),p_mode:fd.get('pay_mode')});closeModal();toast('Marked paid');vStaff($('#view'))},{})});
 }
 
 async function stToday(box,B,active){
@@ -958,6 +985,9 @@ function staffFields(s){
    '<div class="row2">'+inp('phone','Mobile',s.phone,'tel','','10 digits. Used as login for the teacher')+inp('email','Email',s.email,'email')+'</div>'+
    '<div class="row2">'+inp('dob','Date of birth',s.dob,'date')+sel('gender','Gender',GENDERS,s.gender)+'</div>'+
    '<div class="row2">'+inp('joined_on','Joining date',s.joined_on,'date')+inp('monthly_salary','Monthly salary (₹)',s.monthly_salary,'number','min="0" step="100"')+'</div>'+
+   '<div class="row2">'+inp('shift_start','Shift start',s.shift_start?String(s.shift_start).slice(0,5):'','time')+inp('shift_end','Shift end',s.shift_end?String(s.shift_end).slice(0,5):'','time')+'</div>'+
+   '<div class="row2">'+inp('work_hours','Work hours per day',s.work_hours,'number','min="1" max="12" step="0.5"')+sel('pay_mode','Pay mode',[['','—'],['online','Online'],['cash','Cash']],s.pay_mode||'')+'</div>'+
+   inp('holdback_pct','Holdback % of salary',s.holdback_pct==null?0:s.holdback_pct,'number','min="0" max="100" step="1"','Salary ka itna % roka jata hai (sheet mein 10%).')+
    inp('address','Address',s.address)+
    '<div class="row2">'+inp('aadhaar_last4','Aadhaar last 4 digits',s.aadhaar_last4,'text','inputmode="numeric" maxlength="4" pattern="[0-9]{4}"','Never store the full Aadhaar number.')+sel('status','Status',[['active','Working'],['left','Left the school']],s.status||'active')+'</div>'+
    inp('notes','Notes',s.notes);
@@ -965,6 +995,9 @@ function staffFields(s){
 function staffPayload(fd){
   const o={};['full_name','staff_code','designation','subjects','classes_taught','qualification','phone','email','dob','gender','joined_on','address','aadhaar_last4','notes','status'].forEach(k=>{const v=(fd.get(k)||'').trim();o[k]=v===''?null:v});
   const sal=(fd.get('monthly_salary')||'').trim();o.monthly_salary=sal===''?null:Math.round(Number(sal));
+  ['shift_start','shift_end','pay_mode'].forEach(k=>{const v=(fd.get(k)||'').trim();o[k]=v===''?null:v});
+  const wh=(fd.get('work_hours')||'').trim();if(wh!=='')o.work_hours=Number(wh);
+  const hb=(fd.get('holdback_pct')||'').trim();o.holdback_pct=hb===''?0:Number(hb);
   if(!o.full_name)throw new Error('Name is required');if(!o.status)o.status='active';
   if(o.phone){const d=o.phone.replace(/\D/g,'').slice(-10);if(d.length!==10)throw new Error('Mobile must be 10 digits');o.phone=d}
   return o;
