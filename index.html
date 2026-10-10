@@ -197,7 +197,7 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:var(--
     <form id="loginForm" class="gate-card">
       <div style="background:var(--navy);border-radius:8px;padding:12px;display:grid;place-items:center"><img class="logo" alt="Al-Khair Academy logo" style="height:96px;width:auto"></div>
       <div><span class="eyebrow">School ERP</span><h1>Sign in</h1></div>
-      <div class="field"><label for="lemail">Email</label><input class="input" id="lemail" type="email" autocomplete="username" required></div>
+      <div class="field"><label for="lemail">Email or mobile number</label><input class="input" id="lemail" type="text" inputmode="email" autocapitalize="off" autocomplete="username" required></div>
       <div class="field"><label for="lpass">Password</label><input class="input" id="lpass" type="password" autocomplete="current-password" required></div>
       <div class="err" id="lerr" role="alert"></div>
       <button class="btn" id="lbtn" type="submit">Sign in</button>
@@ -374,13 +374,15 @@ const classByName=n=>S.classes.find(c=>c.name===n);
 const summaryRows=()=>all((a,b)=>sb.from('v_student_fee_summary').select('*').eq('academic_year_id',S.year.id).order('sort_order').order('full_name').range(a,b));
 
 /* ---------- routing ---------- */
-const NAV=[['dashboard','Dashboard'],['students','Students'],['documents','Documents'],['fees','Fees'],['accounts','Accounts'],['trends','Trends'],['import','Import']];
+const NAV=[['dashboard','Dashboard'],['students','Students'],['documents','Documents'],['staff','Staff'],['fees','Fees'],['accounts','Accounts'],['trends','Trends'],['import','Import']];
 function currentRoute(){const h=location.hash.replace(/^#\/?/,'').split('/');return{name:h[0]||'dashboard',arg:h[1]?decodeURIComponent(h[1]):null}}
 async function route(){
   if(!S.user)return;
   const r=currentRoute(),view=$('#view');
+  if(S.user.user_metadata&&S.user.user_metadata.temp_password){$('#nav').innerHTML='';await vSetPassword(view);return}
+  if(S.profile&&S.profile.role==='teacher'){$('#nav').innerHTML='<a href="#/me" aria-current="page">My attendance</a>';view.innerHTML='<p class="muted">Loading…</p>';try{await vMyAttendance(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
   $('#nav').innerHTML=NAV.map(n=>'<a href="#/'+n[0]+'"'+((r.name===n[0]||(r.name==='student'&&n[0]==='students'))?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');
-  const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,fees:vFees,accounts:vAccounts,trends:vTrends,import:vImport}[r.name]||vDashboard;
+  const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,fees:vFees,accounts:vAccounts,trends:vTrends,import:vImport}[r.name]||vDashboard;
   view.innerHTML='<p class="muted">Loading…</p>';
   try{await fn(view,r.arg);}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted" style="margin-top:6px">'+esc(errMsg(e))+'</p><p style="margin-top:10px"><button class="btn" onclick="route()">Try again</button></p></div>'}
   window.scrollTo(0,0);
@@ -859,6 +861,224 @@ async function runImport(res){
   await rpc('apply_fee_structure_for_year',{p_year:S.year.id});
 }
 
+
+/* =================================================================
+   STAFF: directory, geofence attendance, settings
+================================================================= */
+const ST_LABEL={present:['Present','good'],late:['Late','warn'],half_day:['Half day','warn'],paid_leave:['Paid leave','neutral'],unpaid_leave:['Unpaid leave','neutral'],absent:['Absent','bad']};
+const ST_CODE={present:'P',late:'L',half_day:'H',paid_leave:'PL',unpaid_leave:'UL',absent:'A'};
+const DAYN=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+let staffTab='today',staffMonth=today().slice(0,7);
+const hhmm=ts=>ts?new Date(ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true}):'';
+const stPill=s=>{const x=ST_LABEL[s];return x?'<span class="pill '+x[1]+'">'+x[0]+'</span>':''};
+async function staffBase(){
+  const [staff,cfg,hol]=await Promise.all([
+    q(sb.from('staff').select('*').order('full_name')),
+    q(sb.from('school_settings').select('*').limit(1).single()),
+    q(sb.from('school_holidays').select('*').order('holiday_on'))]);
+  return{staff,cfg,hol,holSet:Object.fromEntries(hol.map(h=>[h.holiday_on,h.name]))};
+}
+const isOff=(cfg,holSet,ds)=>{const d=new Date(ds+'T00:00:00');return (cfg.weekly_off||[]).includes(d.getDay())?'Weekly off':(holSet[ds]||null)};
+
+async function vStaff(el){
+  const B=await staffBase();
+  const active=B.staff.filter(s=>s.status==='active');
+  el.innerHTML=head('Staff',active.length+' active staff'+(B.cfg.geo_lat==null?' · school location not set':''),'')+
+   (B.cfg.geo_lat==null?'<p class="banner" style="margin-bottom:12px">Set the school location in the Settings tab first. Teachers can punch only after that.</p>':'')+
+   '<div class="seg" role="group" aria-label="Staff view" style="justify-self:start;max-width:100%;overflow-x:auto">'+[['today','Today'],['month','Monthly'],['dir','Staff list'],['set','Settings']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(staffTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="sbody" style="margin-top:14px;min-width:0;max-width:100%"></div>';
+  $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{staffTab=b.dataset.t;vStaff(el)});
+  const box=$('#sbody');
+  try{
+    if(staffTab==='today')await stToday(box,B,active);
+    else if(staffTab==='month')await stMonth(box,B,active);
+    else if(staffTab==='dir')stDir(box,B);
+    else stSettings(box,B);
+  }catch(e){box.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}
+}
+
+async function stToday(box,B,active){
+  const ds=today(),off=isOff(B.cfg,B.holSet,ds);
+  const [att,bad]=await Promise.all([
+    q(sb.from('staff_attendance').select('*').eq('work_date',ds)),
+    q(sb.from('staff_punch_log').select('staff_id,distance_m,at,result').eq('inside',false).gte('at',ds+'T00:00:00+05:30'))]);
+  const by=Object.fromEntries(att.map(a=>[a.staff_id,a]));
+  const cnt=k=>active.filter(s=>by[s.id]&&k.includes(by[s.id].status)).length;
+  const notIn=active.filter(s=>!by[s.id]).length;
+  const badBy={};bad.forEach(b=>{badBy[b.staff_id]=b});
+  box.innerHTML='<div class="kpis">'+kpi('In school',String(cnt(['present','late','half_day'])),'of '+active.length+' staff')+kpi('Late',String(cnt(['late'])),'after '+hhmm('2000-01-01T'+B.cfg.shift_start)+' + '+B.cfg.grace_minutes+' min')+kpi('On leave',String(cnt(['paid_leave','unpaid_leave'])),'marked by you')+kpi(off?'Today':'Not in yet',off?'Off':String(notIn),off?off:'no punch so far')+'</div>'+
+   '<div class="card"><div class="card-head"><h2>'+fmtDate(ds)+' · '+DAYN[new Date(ds+'T00:00:00').getDay()]+'</h2></div>'+
+   (active.length?'<div class="tablewrap"><table><thead><tr><th>Name</th><th>Designation</th><th>Status</th><th>In</th><th>Out</th><th>Distance</th><th></th></tr></thead><tbody>'+
+    active.map(s=>{const a=by[s.id],b=badBy[s.id];return'<tr><td>'+esc(s.full_name)+'</td><td>'+esc(s.designation||'')+'</td><td>'+(a?stPill(a.status)+(a.source==='manual'?' <span class="muted small">manual</span>':''):(off?'<span class="muted small">'+esc(off)+'</span>':'<span class="pill neutral">Not in yet</span>'))+(b&&!a?' <span class="pill bad" title="Tried to punch from outside">outside '+b.distance_m+' m</span>':'')+'</td><td class="nowrap">'+hhmm(a&&a.check_in)+'</td><td class="nowrap">'+hhmm(a&&a.check_out)+'</td><td class="nowrap">'+(a&&a.in_distance_m!=null?a.in_distance_m+' m':'')+'</td><td class="r nowrap"><button class="btn ghost sm" data-mark="'+esc(s.id)+'">Mark</button></td></tr>'}).join('')+'</tbody></table></div>':'<p class="muted">No staff yet. Add them in the Staff list tab.</p>')+'</div>';
+  $$('[data-mark]').forEach(b=>b.onclick=()=>markModal(B,active.find(s=>s.id===b.dataset.mark),ds,by[b.dataset.mark],()=>vStaff($('#view'))));
+}
+function markModal(B,s,ds,a,done){
+  formModal('Mark attendance: '+s.full_name,
+   '<p class="muted small">'+fmtDate(ds)+'. Use this for leave, or to correct a punch.</p>'+
+   sel('status','Status',[['present','Present'],['late','Late'],['half_day','Half day'],['paid_leave','Paid leave'],['unpaid_leave','Unpaid leave'],['absent','Absent']],a?a.status:'present')+
+   inp('note','Note',a&&a.note||''),'Save',async fd=>{
+    const row={status:fd.get('status'),note:(fd.get('note')||'').trim()||null,marked_by:S.user.id};
+    if(a)await q(sb.from('staff_attendance').update(row).eq('id',a.id));
+    else await q(sb.from('staff_attendance').insert({...row,staff_id:s.id,work_date:ds,source:'manual'}));
+    closeModal();toast('Saved');done()},{});
+  if(a){const b=document.createElement('button');b.type='button';b.className='btn danger sm';b.textContent='Clear this day';b.onclick=async()=>{try{await q(sb.from('staff_attendance').delete().eq('id',a.id));closeModal();toast('Cleared');done()}catch(e){toast(errMsg(e),true)}};$('#mf .actions').prepend(b)}
+}
+
+async function stMonth(box,B,active){
+  const [y,m]=staffMonth.split('-').map(Number),dim=new Date(y,m,0).getDate(),first=staffMonth+'-01',last=staffMonth+'-'+String(dim).padStart(2,'0'),td=today();
+  const att=await all((a,b)=>sb.from('staff_attendance').select('*').gte('work_date',first).lte('work_date',last).range(a,b));
+  const by={};att.forEach(a=>{(by[a.staff_id]=by[a.staff_id]||{})[a.work_date]=a});
+  const days=[...Array(dim)].map((_,i)=>{const ds=staffMonth+'-'+String(i+1).padStart(2,'0');return{ds,n:i+1,dow:new Date(ds+'T00:00:00').getDay(),off:isOff(B.cfg,B.holSet,ds)}});
+  const calc=s=>{const r={work:0,P:0,L:0,H:0,PL:0,UL:0,A:0,cells:[]};
+    days.forEach(d=>{
+      if(d.ds>td||(s.joined_on&&d.ds<s.joined_on)){r.cells.push('');return}
+      const a=(by[s.id]||{})[d.ds];
+      if(d.off&&!a){r.cells.push('off');return}
+      r.work++;
+      const c=a?ST_CODE[a.status]:'A';r.cells.push(c);
+      if(c==='P')r.P++;else if(c==='L')r.L++;else if(c==='H')r.H++;else if(c==='PL')r.PL++;else if(c==='UL')r.UL++;else r.A++;});
+    r.attended=r.P+r.L+r.H*0.5;return r};
+  const rows=active.map(s=>({s,r:calc(s)}));
+  const col={P:'var(--good)',L:'var(--warn)',H:'var(--warn)',PL:'var(--muted)',UL:'var(--muted)',A:'var(--bad)'};
+  box.innerHTML='<div class="toolbar" style="margin-bottom:10px"><input class="input" type="month" id="smon" value="'+staffMonth+'" aria-label="Month"><button class="btn ghost" id="sx">Download</button></div>'+
+   '<div class="card" style="min-width:0"><div class="tablewrap"><table><thead><tr><th>Name</th><th class="r">Working days</th><th class="r">Present</th><th class="r">Late</th><th class="r">Half</th><th class="r">Paid leave</th><th class="r">Unpaid</th><th class="r">Absent</th>'+days.map(d=>'<th class="r" style="padding:6px 4px;font-size:11px"'+(d.off?' title="'+esc(d.off)+'"':'')+'>'+d.n+'</th>').join('')+'</tr></thead><tbody>'+
+   (rows.length?rows.map(({s,r})=>'<tr><td class="nowrap">'+esc(s.full_name)+'</td><td class="r">'+r.work+'</td><td class="r"><b>'+r.attended+'</b></td><td class="r">'+r.L+'</td><td class="r">'+r.H+'</td><td class="r">'+r.PL+'</td><td class="r">'+r.UL+'</td><td class="r">'+(r.A?'<b style="color:var(--bad)">'+r.A+'</b>':'0')+'</td>'+r.cells.map(c=>'<td class="r" style="padding:6px 4px;font-size:11px;font-weight:700;color:'+(col[c]||'var(--muted)')+'">'+(c==='off'?'·':c)+'</td>').join('')+'</tr>').join(''):'<tr><td colspan="9" class="muted">No staff yet.</td></tr>')+'</tbody></table></div>'+
+   '<p class="muted small" style="margin-top:8px">P present, L late, H half day (counts 0.5), PL paid leave, UL unpaid leave, A absent (no punch on a working day), · weekly off or holiday. Late still counts as present. Present column = P + L + half of H.</p></div>';
+  $('#smon').onchange=e=>{if(e.target.value){staffMonth=e.target.value;vStaff($('#view'))}};
+  $('#sx').onclick=()=>{
+    if(typeof XLSX==='undefined'){toast('The spreadsheet writer could not load. Reload and try again.',true);return}
+    const data=rows.map(({s,r})=>{const o={Name:s.full_name,Designation:s.designation||'','Working days':r.work,Present:r.attended,Late:r.L,'Half day':r.H,'Paid leave':r.PL,'Unpaid leave':r.UL,Absent:r.A};days.forEach((d,i)=>{o[d.n]=r.cells[i]==='off'?'-':r.cells[i]});return o});
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(data),staffMonth);XLSX.writeFile(wb,'AlKhair_staff_attendance_'+staffMonth+'.xlsx')};
+}
+
+function staffFields(s){
+  s=s||{};
+  return '<div class="row2">'+inp('full_name','Full name',s.full_name,'text','required')+inp('staff_code','Staff code',s.staff_code,'text','','Optional, e.g. T01')+'</div>'+
+   '<div class="row2">'+inp('designation','Designation',s.designation,'text','','Teacher, Principal, Peon...')+inp('subjects','Subjects',s.subjects)+'</div>'+
+   '<div class="row2">'+inp('classes_taught','Classes',s.classes_taught,'text','','e.g. Class 3 to 5')+inp('qualification','Qualification',s.qualification)+'</div>'+
+   '<div class="row2">'+inp('phone','Mobile',s.phone,'tel','','10 digits. Used as login for the teacher')+inp('email','Email',s.email,'email')+'</div>'+
+   '<div class="row2">'+inp('dob','Date of birth',s.dob,'date')+sel('gender','Gender',GENDERS,s.gender)+'</div>'+
+   '<div class="row2">'+inp('joined_on','Joining date',s.joined_on,'date')+inp('monthly_salary','Monthly salary (₹)',s.monthly_salary,'number','min="0" step="100"')+'</div>'+
+   inp('address','Address',s.address)+
+   '<div class="row2">'+inp('aadhaar_last4','Aadhaar last 4 digits',s.aadhaar_last4,'text','inputmode="numeric" maxlength="4" pattern="[0-9]{4}"','Never store the full Aadhaar number.')+sel('status','Status',[['active','Working'],['left','Left the school']],s.status||'active')+'</div>'+
+   inp('notes','Notes',s.notes);
+}
+function staffPayload(fd){
+  const o={};['full_name','staff_code','designation','subjects','classes_taught','qualification','phone','email','dob','gender','joined_on','address','aadhaar_last4','notes','status'].forEach(k=>{const v=(fd.get(k)||'').trim();o[k]=v===''?null:v});
+  const sal=(fd.get('monthly_salary')||'').trim();o.monthly_salary=sal===''?null:Math.round(Number(sal));
+  if(!o.full_name)throw new Error('Name is required');if(!o.status)o.status='active';
+  if(o.phone){const d=o.phone.replace(/\D/g,'').slice(-10);if(d.length!==10)throw new Error('Mobile must be 10 digits');o.phone=d}
+  return o;
+}
+function stDir(box,B){
+  box.innerHTML='<div class="toolbar" style="margin-bottom:10px"><button class="btn" id="sadd">Add staff</button><button class="btn ghost" id="simp">Import from Excel</button><input type="file" id="sfile" accept=".xlsx,.xls,.csv" hidden></div>'+
+   '<div class="card">'+(B.staff.length?'<div class="tablewrap"><table><thead><tr><th>Name</th><th>Designation</th><th>Subjects / classes</th><th>Mobile</th><th>Joined</th><th class="r">Salary</th><th>Login</th><th>Status</th></tr></thead><tbody>'+
+   B.staff.map(s=>'<tr class="click" data-s="'+esc(s.id)+'"><td><a href="#" data-s="'+esc(s.id)+'">'+esc(s.full_name)+'</a></td><td>'+esc(s.designation||'')+'</td><td>'+esc([s.subjects,s.classes_taught].filter(Boolean).join(' · '))+'</td><td class="nowrap">'+esc(s.phone||'')+'</td><td class="nowrap">'+fmtDate(s.joined_on)+'</td><td class="r">'+(s.monthly_salary!=null?inr(s.monthly_salary):'<span class="muted">-</span>')+'</td><td>'+(s.user_id?'<span class="pill good">Created</span>':'<span class="pill neutral">None</span>')+'</td><td><span class="pill '+(s.status==='active'?'good':'neutral')+'">'+(s.status==='active'?'Working':'Left')+'</span></td></tr>').join('')+'</tbody></table></div>':'<p class="muted">No staff yet. Use Add staff, or import an Excel with Name, Designation, Mobile, Joining date and Salary.</p>')+'</div>';
+  const again=()=>vStaff($('#view'));
+  $('#sadd').onclick=()=>formModal('Add staff',staffFields(),'Add staff',async fd=>{await q(sb.from('staff').insert(staffPayload(fd)));closeModal();toast('Staff added');again()},{wide:true});
+  $$('tr.click[data-s]').forEach(tr=>tr.onclick=e=>{e.preventDefault();staffModal(B.staff.find(x=>x.id===tr.dataset.s),again)});
+  $('#simp').onclick=()=>$('#sfile').click();
+  $('#sfile').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{await staffImport(f);toast('Staff imported');again()}catch(err){toast(errMsg(err),true)}};
+}
+function staffModal(s,again){
+  const sheet=formModal(s.full_name,staffFields(s)+'<div class="card" style="background:var(--surface2)"><b>Teacher login</b><p class="muted small" style="margin:4px 0 8px">'+(s.user_id?'Login created. Teacher signs in with '+esc(s.login_id&&s.login_id.endsWith('@staff.alkhair.in')?'mobile '+(s.phone||''):(s.login_id||''))+'.':'Teacher signs in with mobile number (or email) and a temporary password that you hand over. They must set their own password at first sign in.')+'</p><div id="lgout"></div><div class="toolbar">'+(s.user_id?'<button type="button" class="btn ghost sm" id="lgreset">Reset password</button><button type="button" class="btn ghost sm" id="lgoff">'+'Block / unblock login</button>':'<button type="button" class="btn sm" id="lgmake">Create login</button>')+'</div></div>','Save',async fd=>{
+    await q(sb.from('staff').update(staffPayload(fd)).eq('id',s.id));closeModal();toast('Saved');again()},{wide:true});
+  const call=async action=>{
+    const out=$('#lgout');out.innerHTML='<p class="muted small">Working…</p>';
+    try{
+      const {data,error}=await sb.functions.invoke('staff-login',{body:{action,staff_id:s.id}});
+      if(error){let m=error.message;try{const j=await error.context.json();if(j&&j.error)m=j.error}catch(_){ }throw new Error(m)}
+      if(data&&data.error)throw new Error(data.error);
+      out.innerHTML='<div class="banner" style="margin:6px 0 10px"><b>Give this to '+esc(s.full_name)+' now. It will not be shown again.</b><br>Login: <b>'+esc(data.login_hint||data.login_id)+'</b><br>Temporary password: <b style="font-size:18px;letter-spacing:1px">'+esc(data.temp_password)+'</b></div>';
+      again();
+    }catch(e){out.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}};
+  if($('#lgmake'))$('#lgmake').onclick=()=>call('create');
+  if($('#lgreset'))$('#lgreset').onclick=()=>call('reset');
+  if($('#lgoff'))$('#lgoff').onclick=async()=>{try{const p=await q(sb.from('profiles').select('is_active').eq('id',s.user_id).single());await q(sb.from('profiles').update({is_active:!p.is_active}).eq('id',s.user_id));$('#lgout').innerHTML='<p class="small"><b>Login is now '+(!p.is_active?'active':'blocked')+'.</b></p>'}catch(e){$('#lgout').innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}};
+}
+async function staffImport(file){
+  if(typeof XLSX==='undefined')throw new Error('The spreadsheet reader could not load. Reload and try again.');
+  const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true}),rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:'',raw:true});
+  if(!rows.length)throw new Error('The file has no rows');
+  const norm=k=>String(k).toLowerCase().replace(/[^a-z]/g,'');
+  const pick=(r,...names)=>{for(const k of Object.keys(r)){if(names.includes(norm(k))&&r[k]!=='')return r[k]}return ''};
+  const ds=v=>{if(!v)return null;if(v instanceof Date)return new Date(v.getTime()-v.getTimezoneOffset()*60000).toISOString().slice(0,10);const t=String(v).trim();return /^\d{4}-\d{2}-\d{2}/.test(t)?t.slice(0,10):null};
+  const out=[];
+  rows.forEach(r=>{const nm=String(pick(r,'name','fullname','staffname','teachername')).trim();if(!nm)return;
+    const ph=String(pick(r,'mobile','phone','contact','contactno','mobileno')).replace(/\D/g,'').slice(-10);
+    const g=String(pick(r,'gender','sex')).toLowerCase();
+    const sal=Number(String(pick(r,'salary','monthlysalary')).replace(/[^\d.]/g,''));
+    out.push({full_name:nm,designation:String(pick(r,'designation','post','role')).trim()||null,subjects:String(pick(r,'subjects','subject')).trim()||null,classes_taught:String(pick(r,'classes','class','classestaught')).trim()||null,phone:ph.length===10?ph:null,email:String(pick(r,'email','emailid')).trim().toLowerCase()||null,dob:ds(pick(r,'dob','dateofbirth','birthdate')),gender:/^f/.test(g)?'female':/^m/.test(g)?'male':null,joined_on:ds(pick(r,'joiningdate','joined','dateofjoining','doj')),qualification:String(pick(r,'qualification')).trim()||null,address:String(pick(r,'address')).trim()||null,monthly_salary:sal>0?Math.round(sal):null})});
+  if(!out.length)throw new Error('No names found. The first row must have headings like Name, Designation, Mobile.');
+  await q(sb.from('staff').insert(out));
+}
+
+function stSettings(box,B){
+  const c=B.cfg,t=v=>String(v||'').slice(0,5);
+  box.innerHTML='<div class="grid2e"><div class="card"><h2 style="margin-bottom:10px">School location (geofence)</h2><form id="gf" style="display:grid;gap:12px">'+
+   '<div class="row2">'+inp('geo_lat','Latitude',c.geo_lat==null?'':c.geo_lat,'number','step="0.000001"')+inp('geo_lng','Longitude',c.geo_lng==null?'':c.geo_lng,'number','step="0.000001"')+'</div>'+
+   '<button type="button" class="btn ghost" id="geo">Use my current location</button><p class="muted small">Open this page on your phone while standing inside the school (ideally in the middle of the building) and tap the button. The location shown here is used to measure every teacher\'s distance.</p>'+
+   inp('geo_radius_m','Allowed distance from school (metres)',c.geo_radius_m,'number','min="20" max="2000" step="10"','150 m covers most buildings. Lower it if you want it stricter.')+
+   '<h3 style="margin-top:6px">Timing and rules</h3>'+
+   '<div class="row2">'+inp('shift_start','School starts',t(c.shift_start),'time')+inp('shift_end','School ends',t(c.shift_end),'time')+'</div>'+
+   '<div class="row2">'+inp('grace_minutes','On time up to (minutes after start)',c.grace_minutes,'number','min="0"')+inp('halfday_after_minutes','Half day if later than (minutes after start)',c.halfday_after_minutes,'number','min="0"')+'</div>'+
+   inp('paid_leaves_per_month','Paid leaves per month',c.paid_leaves_per_month==null?'':c.paid_leaves_per_month,'number','min="0" step="0.5"','Used for salary. Leave empty until you decide.')+
+   '<div class="field"><label>Weekly off</label><div style="display:flex;gap:10px;flex-wrap:wrap">'+DAYN.map((d,i)=>'<label style="display:flex;gap:4px;align-items:center;font-weight:400"><input type="checkbox" name="wo" value="'+i+'"'+((c.weekly_off||[]).includes(i)?' checked':'')+'>'+d+'</label>').join('')+'</div></div>'+
+   '<div class="err" id="gerr" role="alert"></div><button class="btn" type="submit">Save settings</button></form></div>'+
+   '<div class="card"><h2 style="margin-bottom:10px">Holidays</h2><form id="hf" class="toolbar" style="margin-bottom:10px"><input class="input" type="date" id="hd" required aria-label="Date"><input class="input" id="hn" placeholder="Name, e.g. Eid" required aria-label="Holiday name"><button class="btn" type="submit">Add</button></form>'+
+   (B.hol.length?'<ul class="list">'+B.hol.map(h=>'<li><div><b>'+fmtDate(h.holiday_on)+'</b> · '+esc(h.name)+'</div><button class="btn danger sm" style="margin-left:auto" data-hd="'+esc(h.holiday_on)+'">Remove</button></li>').join('')+'</ul>':'<p class="muted small">No holidays added. Sundays (weekly off) are already skipped.</p>')+'</div></div>';
+  $('#geo').onclick=()=>{
+    if(!navigator.geolocation){toast('This phone or browser cannot give location',true);return}
+    $('#geo').textContent='Getting location…';
+    navigator.geolocation.getCurrentPosition(p=>{$('#geo_lat').value=p.coords.latitude.toFixed(6);$('#geo_lng').value=p.coords.longitude.toFixed(6);$('#geo').textContent='Use my current location';toast('Location filled (accuracy about '+Math.round(p.coords.accuracy)+' m). Now press Save settings.')},
+      er=>{$('#geo').textContent='Use my current location';toast(er.code===1?'Allow location access for this site, then try again':'Could not get location. Try near a window',true)},{enableHighAccuracy:true,timeout:25000,maximumAge:0});
+  };
+  $('#gf').onsubmit=async e=>{e.preventDefault();$('#gerr').textContent='';
+    try{const g=n=>($('#'+n).value||'').trim(),num0=n=>g(n)===''?null:Number(g(n));
+      const row={geo_lat:num0('geo_lat'),geo_lng:num0('geo_lng'),geo_radius_m:Number(g('geo_radius_m')||150),shift_start:g('shift_start')||'08:00',shift_end:g('shift_end')||'14:00',grace_minutes:Number(g('grace_minutes')||0),halfday_after_minutes:Number(g('halfday_after_minutes')||0),paid_leaves_per_month:num0('paid_leaves_per_month'),weekly_off:[...document.querySelectorAll('input[name=wo]:checked')].map(x=>Number(x.value))};
+      if((row.geo_lat==null)!==(row.geo_lng==null))throw new Error('Fill both latitude and longitude');
+      await q(sb.from('school_settings').update(row).eq('id',true));toast('Settings saved');vStaff($('#view'))}catch(er){$('#gerr').textContent=errMsg(er)}};
+  $('#hf').onsubmit=async e=>{e.preventDefault();try{await q(sb.from('school_holidays').upsert({holiday_on:$('#hd').value,name:$('#hn').value.trim()}));vStaff($('#view'))}catch(er){toast(errMsg(er),true)}};
+  $$('[data-hd]').forEach(b=>b.onclick=async()=>{try{await q(sb.from('school_holidays').delete().eq('holiday_on',b.dataset.hd));vStaff($('#view'))}catch(er){toast(errMsg(er),true)}});
+}
+
+/* =================================================================
+   TEACHER SELF SERVICE: punch in / out
+================================================================= */
+async function vSetPassword(el){
+  el.innerHTML='<div class="card" style="max-width:420px;margin:24px auto"><h2>Set your own password</h2><p class="muted small" style="margin:6px 0 12px">You signed in with a temporary password. Choose a new one that only you know.</p><form id="pf" style="display:grid;gap:12px">'+inp('np1','New password','','password','minlength="8" required autocomplete="new-password"','At least 8 characters')+inp('np2','Type it again','','password','minlength="8" required autocomplete="new-password"')+'<div class="err" id="perr" role="alert"></div><button class="btn" type="submit">Save password</button></form></div>';
+  $('#pf').onsubmit=async e=>{e.preventDefault();$('#perr').textContent='';
+    if($('#np1').value!==$('#np2').value){$('#perr').textContent='The two passwords are not the same';return}
+    const {error}=await sb.auth.updateUser({password:$('#np1').value,data:{temp_password:false}});
+    if(error){$('#perr').textContent=error.message;return}
+    S.user.user_metadata=Object.assign({},S.user.user_metadata,{temp_password:false});toast('Password saved');route()};
+}
+async function vMyAttendance(el){
+  const me=await q(sb.from('staff').select('*').eq('user_id',S.user.id).maybeSingle());
+  if(!me){el.innerHTML='<div class="card empty">Your login is not linked to a staff record. Ask the owner.</div>';return}
+  const cfg=await q(sb.from('school_settings').select('geo_lat,geo_radius_m,shift_start,shift_end,grace_minutes').limit(1).single()).catch(()=>null);
+  const first=today().slice(0,7)+'-01';
+  const rows=await q(sb.from('staff_attendance').select('*').gte('work_date',first).order('work_date',{ascending:false}));
+  const td=rows.find(r=>r.work_date===today());
+  const cnt=k=>rows.filter(r=>k.includes(r.status)).length;
+  el.innerHTML=head('Hello, '+me.full_name.split(' ')[0],fmtDate(today())+(me.designation?' · '+me.designation:''),'')+
+   '<div class="card" style="text-align:center;max-width:520px;margin:0 auto 14px"><p class="muted small">Today</p><div style="font-size:22px;margin:6px 0">'+(td?stPill(td.status):'<span class="pill neutral">Not punched in</span>')+'</div>'+
+   '<p class="small">'+(td&&td.check_in?'In '+hhmm(td.check_in):'')+(td&&td.check_out?' · Out '+hhmm(td.check_out):'')+'</p>'+
+   '<button class="btn" id="punch" style="font-size:18px;padding:14px 26px;margin:12px 0">'+(td&&td.check_in?'Punch out':'Punch in')+'</button>'+
+   '<p class="muted small" id="pmsg">Allow location when the phone asks. You must be inside the school. Punch in when you arrive and punch out when you leave.</p></div>'+
+   '<div class="kpis">'+kpi('Present',String(cnt(['present','late'])+cnt(['half_day'])*0.5),'this month')+kpi('Late',String(cnt(['late'])),'this month')+kpi('Leave',String(cnt(['paid_leave','unpaid_leave'])),'this month')+'</div>'+
+   '<div class="card"><h2 style="margin-bottom:10px">This month</h2>'+(rows.length?'<div class="tablewrap"><table><thead><tr><th>Date</th><th>Status</th><th>In</th><th>Out</th></tr></thead><tbody>'+rows.map(r=>'<tr><td class="nowrap">'+fmtDate(r.work_date)+'</td><td>'+stPill(r.status)+'</td><td>'+hhmm(r.check_in)+'</td><td>'+hhmm(r.check_out)+'</td></tr>').join('')+'</tbody></table></div>':'<p class="muted">Nothing yet this month.</p>')+'</div>';
+  $('#punch').onclick=()=>{
+    const b=$('#punch'),m=$('#pmsg');
+    if(!navigator.geolocation){m.textContent='This phone or browser cannot give location. Try Chrome.';return}
+    b.disabled=true;m.textContent='Finding your location…';
+    navigator.geolocation.getCurrentPosition(async p=>{
+      try{const r=await rpc('staff_punch',{p_lat:p.coords.latitude,p_lng:p.coords.longitude,p_accuracy:p.coords.accuracy});
+        toast((r.action==='check_in'?'Punched in':'Punched out')+' · '+r.distance_m+' m from school');vMyAttendance(el)}
+      catch(e){m.innerHTML='<span class="err">'+esc(errMsg(e))+'</span>';b.disabled=false}
+    },er=>{b.disabled=false;m.innerHTML='<span class="err">'+(er.code===1?'Location is blocked. Allow location for this site in the browser settings, then try again.':'Could not get your location. Move near a window and try again.')+'</span>'},{enableHighAccuracy:true,timeout:25000,maximumAge:0});
+  };
+}
+
 /* =================================================================
    AUTH AND START-UP
 ================================================================= */
@@ -866,19 +1086,19 @@ async function startApp(session){
   try{
     S.user=session.user;
     const prof=await q(sb.from('profiles').select('*').eq('id',S.user.id).maybeSingle());
-    if(!prof||!prof.is_active||prof.role!=='owner'){
+    if(!prof||!prof.is_active||!['owner','teacher'].includes(prof.role)){
       $('#boot').hidden=true;$('#app').hidden=true;$('#gate').hidden=false;
       $('#lerr').textContent='This account does not have access yet. Ask the owner to add you.';await sb.auth.signOut();S.user=null;return}
-    S.profile=prof;await loadRef();
+    S.profile=prof;if(prof.role==='owner')await loadRef();
     $('#who').textContent=prof.full_name;$('#boot').hidden=true;$('#gate').hidden=true;$('#app').hidden=false;
     await route();
   }catch(e){console.error(e);$('#boot').hidden=true;$('#gate').hidden=false;$('#lerr').textContent='Could not load: '+errMsg(e)}
 }
 $('#loginForm').addEventListener('submit',async e=>{
   e.preventDefault();const b=$('#lbtn');b.disabled=true;$('#lerr').textContent='';
-  const {data,error}=await sb.auth.signInWithPassword({email:$('#lemail').value.trim(),password:$('#lpass').value});
+  const {data,error}=await sb.auth.signInWithPassword({email:(()=>{const v=$('#lemail').value.trim();return v.includes('@')?v:v.replace(/\D/g,'').slice(-10)+'@staff.alkhair.in'})(),password:$('#lpass').value});
   b.disabled=false;
-  if(error){$('#lerr').textContent=/invalid/i.test(error.message)?'Email or password is not correct.':error.message;return}
+  if(error){$('#lerr').textContent=/invalid/i.test(error.message)?'Email, mobile or password is not correct.':error.message;return}
   $('#lpass').value='';await startApp(data.session);
 });
 $('#logout').onclick=async()=>{await sb.auth.signOut();S.user=null;$('#app').hidden=true;$('#gate').hidden=false;location.hash=''};
