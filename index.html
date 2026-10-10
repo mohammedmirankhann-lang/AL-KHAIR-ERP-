@@ -382,7 +382,7 @@ async function route(){
   if(S.user.user_metadata&&S.user.user_metadata.temp_password){$('#nav').innerHTML='';await vSetPassword(view);return}
   if(S.profile&&S.profile.role==='teacher'){$('#nav').innerHTML='<a href="#/me" aria-current="page">My attendance</a>';view.innerHTML='<p class="muted">Loading…</p>';try{await vMyAttendance(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
   $('#nav').innerHTML=NAV.map(n=>'<a href="#/'+n[0]+'"'+((r.name===n[0]||(r.name==='student'&&n[0]==='students'))?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');
-  const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,fees:vFees,accounts:vAccounts,trends:vTrends,import:vImport}[r.name]||vDashboard;
+  const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,olddues:vOldDues,fees:vFees,accounts:vAccounts,trends:vTrends,import:vImport}[r.name]||vDashboard;
   view.innerHTML='<p class="muted">Loading…</p>';
   try{await fn(view,r.arg);}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted" style="margin-top:6px">'+esc(errMsg(e))+'</p><p style="margin-top:10px"><button class="btn" onclick="route()">Try again</button></p></div>'}
   window.scrollTo(0,0);
@@ -553,8 +553,10 @@ async function vStudent(el,enrId){
   const docBy=Object.fromEntries(docs.map(d=>[d.document_type_id,d])),asmBy=Object.fromEntries(asm.map(a=>[a.fee_head_id,a]));
   const required=S.docTypes.filter(d=>cls.sort_order>=d.required_from_order),missing=required.filter(d=>!docBy[d.id]);
   const net=num(fs.gross_fee)-num(fs.discount)+num(fs.previous_dues);
+  let od=[];try{od=await q(sb.from('old_dues').select('*').eq('student_id',en.student_id).in('status',['open','linked']))}catch(e){}
+  const odBanner=od.length?'<p class="banner" style="margin-bottom:12px"><b>Pichhle saal ka baaki:</b> '+od.map(o=>inr(o.amount)+' ('+esc(o.year_label)+', '+esc(o.class_name||'')+')').join(', ')+'. Ye is saal ki fees mein shamil nahi hai. <a href="#/olddues">Old dues</a></p>':'';
   el.innerHTML='<p class="small"><a href="#/students">&larr; All students</a></p>'+
-   head(stu.full_name,'Admission no '+stu.admission_no+' · '+cls.name+' · '+S.year.label,'<span class="pill '+(stu.status==='active'?'good':'neutral')+'">'+esc(stu.status)+'</span><button class="btn ghost" id="editStu">Edit details</button>')+
+   head(stu.full_name,'Admission no '+stu.admission_no+' · '+cls.name+' · '+S.year.label,'<span class="pill '+(stu.status==='active'?'good':'neutral')+'">'+esc(stu.status)+'</span><button class="btn ghost" id="editStu">Edit details</button>')+odBanner+
    '<div class="kpis">'+kpi('Fee due',inr(net),'Fee '+inr(fs.gross_fee)+' − discount '+inr(fs.discount)+(num(fs.previous_dues)?' + previous '+inr(fs.previous_dues):''))+kpi('Paid',inr(fs.paid),payments(pay).n+' payments')+kpi('Balance',inr(Math.max(0,num(fs.balance))),st[0])+kpi('Documents',missing.length?missing.length+' missing':'Complete',required.length-missing.length+' of '+required.length+' received')+'</div>'+
    '<div class="grid2e">'+
    '<div class="card"><div class="card-head"><h2>Fee and discount</h2><div class="toolbar"><button class="btn" id="collect"'+(num(fs.balance)>0?'':' disabled')+'>Collect payment</button></div></div>'+
@@ -892,6 +894,22 @@ async function backupAll(btn){
   catch(e){toast(errMsg(e),true)}finally{btn.disabled=false;btn.textContent=old}
 }
 document.addEventListener('click',e=>{const b=e.target.closest&&e.target.closest('#bkup');if(b)backupAll(b)});
+
+/* ---------- Old dues: previous-session fee dues kept separate from this session ---------- */
+async function vOldDues(el){
+  const [rows,stus]=await Promise.all([q(sb.from('old_dues').select('*').order('class_name').order('student_name')),all((a,b)=>sb.from('students').select('id,admission_no,full_name,father_name').order('full_name').range(a,b))]);
+  const open=rows.filter(r=>r.status==='open'||r.status==='linked'),sn=Object.fromEntries(stus.map(x=>[x.id,x]));
+  const enr=await q(sb.from('enrollments').select('student_id,class_id').eq('academic_year_id',S.year.id));const clsOf=Object.fromEntries(enr.map(e=>[e.student_id,(classById(e.class_id)||{}).name]));
+  el.innerHTML=head('Old dues',open.length+' bachche · '+inr(sum(open.map(r=>num(r.amount))))+' pichhle saal ke baaki (is session ki fees mein shamil nahi)')+
+   '<div class="card"><div class="tablewrap"><table><thead><tr><th>Naam</th><th>Pichhli class</th><th>Pichhla adm.</th><th class="r">Baaki</th><th>Status</th><th></th></tr></thead><tbody>'+
+   rows.map(r=>{const s_=r.student_id&&sn[r.student_id];return'<tr><td>'+esc(r.student_name)+'</td><td>'+esc(r.class_name||'')+' <span class="muted small">'+esc(r.year_label)+'</span></td><td>'+esc(r.old_admission_no||'')+'</td><td class="r"><b>'+inr(r.amount)+'</b></td><td>'+(r.status==='cleared'?'<span class="pill good">Cleared</span>':r.status==='written_off'?'<span class="pill neutral">Written off</span>':s_?'<span class="pill warn">Is saal: '+esc(s_.full_name)+' ('+esc(clsOf[s_.id]||'')+', adm '+esc(s_.admission_no)+')</span>':'<span class="pill neutral">School mein nahi</span>')+(r.note?' <span class="muted small">'+esc(r.note)+'</span>':'')+'</td><td class="r nowrap">'+(r.status==='open'||r.status==='linked'?'<button class="btn ghost sm" data-l="'+r.id+'">'+(s_?'Badlo':'Is saal ke bache se jodo')+'</button> <button class="btn ghost sm" data-c="'+r.id+'">Cleared</button> <button class="btn ghost sm" data-w="'+r.id+'">Write off</button>':'')+'</td></tr>'}).join('')+'</tbody></table></div></div>';
+  const done=async(id,patch,msg)=>{try{await q(sb.from('old_dues').update(patch).eq('id',id));toast(msg);vOldDues(el)}catch(e){toast(errMsg(e),true)}};
+  $$('[data-c]').forEach(b=>b.onclick=()=>formModal('Cleared mark karein',inp('note','Kaise clear hua (jaise jama kiya, date)','','text','required'),'Save',async fd=>{await done(b.dataset.c,{status:'cleared',note:fd.get('note').trim()},'Cleared');closeModal()},{}));
+  $$('[data-w]').forEach(b=>b.onclick=()=>formModal('Write off karein',inp('note','Wajah','','text','required'),'Save',async fd=>{await done(b.dataset.w,{status:'written_off',note:fd.get('note').trim()},'Written off');closeModal()},{}));
+  $$('[data-l]').forEach(b=>b.onclick=()=>{const r=rows.find(x=>x.id===b.dataset.l),w=(r.student_name||'').toLowerCase().split(/\s+/)[0];
+    const cand=stus.filter(x=>x.full_name.toLowerCase().includes(w)).slice(0,40);
+    formModal('Is saal ka bachcha chuniye: '+r.student_name,sel('sid','Student',[['','— nahi, school mein nahi hai —']].concat(cand.map(x=>[x.id,x.full_name+' · '+(clsOf[x.id]||'no enrolment')+' · adm '+x.admission_no+' · '+(x.father_name||'')])),r.student_id||''),'Save',async fd=>{const v=fd.get('sid');await done(r.id,{student_id:v||null,status:v?'linked':'open'},v?'Joda gaya':'Link hata diya');closeModal()},{})});
+}
 
 /* ---------- Reminders: fee and document messages (WhatsApp links, no API needed) ---------- */
 let remTab='fees',remCls='all',remMin=1;
