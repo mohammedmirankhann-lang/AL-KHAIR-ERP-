@@ -931,14 +931,18 @@ async function stPay(box,B){
       await q(sb.from('payroll_lines').upsert({staff_id:fd.get('staff_id'),month:d0,salary:a,days_in_month:dim,paid_days:dim,unpaid_days:0,per_day:Math.round(a/dim*100)/100,hourly:0,earned:a,half_day_cut:0,holdback:0,adjustment:0,net_pay:a,pay_mode:fd.get('pay_mode'),status:'draft',source:'erp',note:(fd.get('note')||'').trim()||'Manual (paper calculation)'},{onConflict:'staff_id,month'}));
       closeModal();toast('Saved');vStaff($('#view'))},{});
   const ph=$('#phdfc');if(ph)ph.onclick=()=>{
-    const on=drafts.filter(l=>l.pay_mode==='online'),miss=on.filter(l=>{const x=nm[l.staff_id]||{};return !x.bank_account_no||!x.bank_ifsc});
-    let deb='';try{deb=localStorage.getItem('hdfcDebit')||''}catch(e){}
-    formModal('HDFC bulk transfer file','<p class="muted small">'+on.length+' online payments, total '+inr(tot(on))+'.'+(miss.length?' <b style="color:var(--bad)">Bank details missing: '+miss.map(l=>esc((nm[l.staff_id]||{}).full_name)).join(', ')+'.</b> Inki rows file mein nahi aayengi.':'')+'</p>'+inp('debit','School HDFC account number (debit)',deb,'text','required inputmode="numeric"')+inp('pdate','Payment date',today(),'date','required'),'Download Excel',async fd=>{
-      const debit=fd.get('debit').trim();try{localStorage.setItem('hdfcDebit',debit)}catch(e){}
-      const d=fd.get('pdate').split('-'),dt=d[2]+'/'+d[1]+'/'+d[0];
-      const rows=on.filter(l=>!miss.includes(l)).map(l=>{const x=nm[l.staff_id];return{'Transaction Type':/^HDFC/i.test(x.bank_ifsc)?'I':'N','Beneficiary Account Number':x.bank_account_no,'Amount':Math.round(num(l.net_pay)*100)/100,'Beneficiary Name':(x.bank_account_name||x.full_name).toUpperCase(),'Debit Account Number':debit,'Payment Date':dt,'IFSC Code':x.bank_ifsc,'Narration':('SALARY '+MONTHS[+payMonth.slice(5,7)-1]+' '+payMonth.slice(0,4)).toUpperCase()}});
-      if(!rows.length)throw new Error('Kisi ki bank details nahi hain');
-      const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Salary');XLSX.writeFile(wb,'AlKhair_HDFC_salary_'+payMonth+'.xlsx');closeModal();toast(rows.length+' payments ki file ban gayi')},{})};
+    const cf=B.cfg,on=drafts.filter(l=>l.pay_mode==='online'),ok=l=>{const x=nm[l.staff_id]||{};return x.bank_account_no&&x.bank_ifsc&&/^[A-Z]{4}0[A-Z0-9]{6}$/.test(x.bank_ifsc)},miss=on.filter(l=>!ok(l)),cash=drafts.filter(l=>l.pay_mode==='cash'),hasRent=cf.rent_payee_account&&cf.rent_amount;
+    formModal('HDFC bulk transfer file','<p class="muted small">'+on.length+' online payments, total '+inr(tot(on))+'.'+(miss.length?' <b style="color:var(--bad)">Bank details ya IFSC galat/missing: '+miss.map(l=>esc((nm[l.staff_id]||{}).full_name)).join(', ')+'.</b> Inki rows file mein nahi aayengi.':'')+'</p>'+
+     (hasRent?'<label style="display:flex;gap:8px;align-items:center;margin:8px 0"><input type="checkbox" name="rent" checked> Rent bhi file mein daalo: '+esc(cf.rent_payee_name)+' '+inr(cf.rent_amount)+'</label>':'')+
+     '<p class="muted small">Debit account: '+esc(cf.debit_account_no||'set nahi hai')+'. Cash wale (' +cash.length+') alag sheet "Cash" mein aayenge.</p>','Download Excel',async fd=>{
+      if(!cf.debit_account_no)throw new Error('Debit account number set nahi hai');
+      const row=(i,ifsc,acc,name,bank,amt)=>({'S.No.':i,'Debit Account Number':cf.debit_account_no,'Debit Firm Name':cf.debit_firm_name||'AL - KHAIR ACADEMY','Credit IFSC Code':ifsc,'Credit Account Number':acc,'Credit Party Name':name,'Bank Name':bank,'Amount':amt});
+      const rows=on.filter(ok).map((l,i)=>{const x=nm[l.staff_id];return row(i+1,x.bank_ifsc,x.bank_account_no,x.bank_account_name||x.full_name.toUpperCase(),x.bank_name||'',Math.round(num(l.net_pay)*100)/100)});
+      if(hasRent&&fd.get('rent'))rows.push(row(rows.length+1,cf.rent_payee_ifsc,cf.rent_payee_account,cf.rent_payee_name,cf.rent_payee_bank||'',num(cf.rent_amount)));
+      if(!rows.length)throw new Error('File mein daalne ko kuch nahi hai');
+      const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),MONTHS[+payMonth.slice(5,7)-1].toUpperCase()+' '+payMonth.slice(0,4));
+      if(cash.length)XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(cash.map((l,i)=>({'S.No.':i+1,'Name':(nm[l.staff_id]||{}).full_name,'Amount':num(l.net_pay)}))),'Cash');
+      XLSX.writeFile(wb,'AlKhair_HDFC_salary_'+payMonth+'.xlsx');closeModal();toast(rows.length+' payments ki file ban gayi')},{})};
   const c=$('#pcsv');if(c)c.onclick=()=>csvDownload('salary-'+payMonth+'.csv',[['Name','Salary','Paid days','Half days','Earned','Half-day cut','Holdback','Adjustment','Net pay','Mode','Status']].concat(lines.map(l=>[(nm[l.staff_id]||{}).full_name,l.salary,l.paid_days,l.half_days,l.earned,l.half_day_cut,l.holdback,l.adjustment,l.net_pay,l.pay_mode||'',l.status])));
   $$('[data-pay]').forEach(b=>b.onclick=()=>{const l=lines.find(x=>x.id===b.dataset.pay);
     formModal('Mark paid: '+((nm[l.staff_id]||{}).full_name||''),'<p class="muted small">Net pay '+inr(l.net_pay)+'</p>'+inp('paid_on','Paid on',today(),'date','required')+sel('pay_mode','Mode',[['online','Online'],['cash','Cash']],l.pay_mode||'online'),'Save',async fd=>{
@@ -1011,13 +1015,13 @@ function staffFields(s){
    '<div class="row2">'+inp('work_hours','Work hours per day',s.work_hours,'number','min="1" max="12" step="0.5"')+sel('pay_mode','Pay mode',[['','—'],['online','Online'],['cash','Cash']],s.pay_mode||'')+'</div>'+
    inp('holdback_pct','Holdback % of salary',s.holdback_pct==null?0:s.holdback_pct,'number','min="0" max="100" step="1"','Salary ka itna % roka jata hai (sheet mein 10%).')+
    '<div class="row2">'+inp('bank_account_no','Bank account number',s.bank_account_no,'text','inputmode="numeric"')+inp('bank_ifsc','IFSC',s.bank_ifsc,'text','maxlength="11" style="text-transform:uppercase"')+'</div>'+
-   inp('bank_account_name','Name as in bank',s.bank_account_name)+
+   '<div class="row2">'+inp('bank_account_name','Name as in bank',s.bank_account_name)+inp('bank_name','Bank name',s.bank_name)+'</div>'+
    inp('address','Address',s.address)+
    '<div class="row2">'+inp('aadhaar_last4','Aadhaar last 4 digits',s.aadhaar_last4,'text','inputmode="numeric" maxlength="4" pattern="[0-9]{4}"','Never store the full Aadhaar number.')+sel('status','Status',[['active','Working'],['left','Left the school']],s.status||'active')+'</div>'+
    inp('notes','Notes',s.notes);
 }
 function staffPayload(fd){
-  const o={};['full_name','staff_code','designation','subjects','classes_taught','qualification','phone','email','dob','gender','joined_on','address','aadhaar_last4','notes','status','bank_account_no','bank_ifsc','bank_account_name'].forEach(k=>{const v=(fd.get(k)||'').trim();o[k]=v===''?null:v});
+  const o={};['full_name','staff_code','designation','subjects','classes_taught','qualification','phone','email','dob','gender','joined_on','address','aadhaar_last4','notes','status','bank_account_no','bank_ifsc','bank_account_name','bank_name'].forEach(k=>{const v=(fd.get(k)||'').trim();o[k]=v===''?null:v});
   if(o.bank_ifsc)o.bank_ifsc=o.bank_ifsc.toUpperCase();if(o.bank_account_no)o.bank_account_no=o.bank_account_no.replace(/\s/g,'');
   const sal=(fd.get('monthly_salary')||'').trim();o.monthly_salary=sal===''?null:Math.round(Number(sal));
   ['shift_start','shift_end','pay_mode'].forEach(k=>{const v=(fd.get(k)||'').trim();o[k]=v===''?null:v});
