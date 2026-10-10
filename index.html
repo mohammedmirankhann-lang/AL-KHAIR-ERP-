@@ -912,7 +912,7 @@ async function stPay(box,B){
   const hbBy={};hb.forEach(l=>{hbBy[l.staff_id]=(hbBy[l.staff_id]||0)+num(l.holdback)});
   const hbTot=Object.values(hbBy).reduce((a,b)=>a+b,0);
   box.innerHTML='<div class="toolbar" style="margin-bottom:10px;gap:8px"><button class="btn ghost sm" id="pp">‹</button><b style="min-width:70px;text-align:center">'+monthLabel(payMonth)+'</b><button class="btn ghost sm" id="pn">›</button>'+
-   '<button class="btn ghost" id="pman">Manual entry (helpers)</button><button class="btn" id="pgen">'+(lines.length?'Recalculate drafts':'Calculate salary')+'</button>'+(lines.length?'<button class="btn ghost" id="pcsv">Download</button>':'')+'</div>'+
+   (drafts.some(l=>l.pay_mode==='online')?'<button class="btn ghost" id="phdfc">HDFC bulk file</button>':'')+'<button class="btn ghost" id="pman">Manual entry (helpers)</button><button class="btn" id="pgen">'+(lines.length?'Recalculate drafts':'Calculate salary')+'</button>'+(lines.length?'<button class="btn ghost" id="pcsv">Download</button>':'')+'</div>'+
    '<div class="kpis">'+kpi('Total payable',inr(tot(lines)),lines.length+' staff')+kpi('Paid',inr(tot(paid)),paid.length+' staff')+kpi('Pending',inr(tot(drafts)),drafts.length+' staff')+kpi('Online / Cash',inr(tot(lines.filter(l=>l.pay_mode==='online')))+' / '+inr(tot(lines.filter(l=>l.pay_mode==='cash'))),'by pay mode')+kpi('Holdback jama',inr(hbTot),'Session '+sy+'-'+String(sy+1).slice(2)+', April mein dena')+'</div>'+
    '<div class="card"><div class="card-head"><h2>Salary '+monthLabel(payMonth)+'</h2></div>'+
    (lines.length?'<div class="tablewrap"><table><thead><tr><th>Name</th><th class="r">Salary</th><th class="r">Paid days</th><th class="r">Half</th><th class="r">Earned</th><th class="r">Cut</th><th class="r">Holdback</th><th class="r">Adj.</th><th class="r">Net pay</th><th>Mode</th><th>Status</th><th></th></tr></thead><tbody>'+
@@ -930,6 +930,15 @@ async function stPay(box,B){
       const dim=new Date(+payMonth.slice(0,4),+payMonth.slice(5,7),0).getDate();
       await q(sb.from('payroll_lines').upsert({staff_id:fd.get('staff_id'),month:d0,salary:a,days_in_month:dim,paid_days:dim,unpaid_days:0,per_day:Math.round(a/dim*100)/100,hourly:0,earned:a,half_day_cut:0,holdback:0,adjustment:0,net_pay:a,pay_mode:fd.get('pay_mode'),status:'draft',source:'erp',note:(fd.get('note')||'').trim()||'Manual (paper calculation)'},{onConflict:'staff_id,month'}));
       closeModal();toast('Saved');vStaff($('#view'))},{});
+  const ph=$('#phdfc');if(ph)ph.onclick=()=>{
+    const on=drafts.filter(l=>l.pay_mode==='online'),miss=on.filter(l=>{const x=nm[l.staff_id]||{};return !x.bank_account_no||!x.bank_ifsc});
+    let deb='';try{deb=localStorage.getItem('hdfcDebit')||''}catch(e){}
+    formModal('HDFC bulk transfer file','<p class="muted small">'+on.length+' online payments, total '+inr(tot(on))+'.'+(miss.length?' <b style="color:var(--bad)">Bank details missing: '+miss.map(l=>esc((nm[l.staff_id]||{}).full_name)).join(', ')+'.</b> Inki rows file mein nahi aayengi.':'')+'</p>'+inp('debit','School HDFC account number (debit)',deb,'text','required inputmode="numeric"')+inp('pdate','Payment date',today(),'date','required'),'Download Excel',async fd=>{
+      const debit=fd.get('debit').trim();try{localStorage.setItem('hdfcDebit',debit)}catch(e){}
+      const d=fd.get('pdate').split('-'),dt=d[2]+'/'+d[1]+'/'+d[0];
+      const rows=on.filter(l=>!miss.includes(l)).map(l=>{const x=nm[l.staff_id];return{'Transaction Type':/^HDFC/i.test(x.bank_ifsc)?'I':'N','Beneficiary Account Number':x.bank_account_no,'Amount':Math.round(num(l.net_pay)*100)/100,'Beneficiary Name':(x.bank_account_name||x.full_name).toUpperCase(),'Debit Account Number':debit,'Payment Date':dt,'IFSC Code':x.bank_ifsc,'Narration':('SALARY '+MONTHS[+payMonth.slice(5,7)-1]+' '+payMonth.slice(0,4)).toUpperCase()}});
+      if(!rows.length)throw new Error('Kisi ki bank details nahi hain');
+      const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'Salary');XLSX.writeFile(wb,'AlKhair_HDFC_salary_'+payMonth+'.xlsx');closeModal();toast(rows.length+' payments ki file ban gayi')},{})};
   const c=$('#pcsv');if(c)c.onclick=()=>csvDownload('salary-'+payMonth+'.csv',[['Name','Salary','Paid days','Half days','Earned','Half-day cut','Holdback','Adjustment','Net pay','Mode','Status']].concat(lines.map(l=>[(nm[l.staff_id]||{}).full_name,l.salary,l.paid_days,l.half_days,l.earned,l.half_day_cut,l.holdback,l.adjustment,l.net_pay,l.pay_mode||'',l.status])));
   $$('[data-pay]').forEach(b=>b.onclick=()=>{const l=lines.find(x=>x.id===b.dataset.pay);
     formModal('Mark paid: '+((nm[l.staff_id]||{}).full_name||''),'<p class="muted small">Net pay '+inr(l.net_pay)+'</p>'+inp('paid_on','Paid on',today(),'date','required')+sel('pay_mode','Mode',[['online','Online'],['cash','Cash']],l.pay_mode||'online'),'Save',async fd=>{
@@ -1001,12 +1010,15 @@ function staffFields(s){
    '<div class="row2">'+inp('shift_start','Shift start',s.shift_start?String(s.shift_start).slice(0,5):'','time')+inp('shift_end','Shift end',s.shift_end?String(s.shift_end).slice(0,5):'','time')+'</div>'+
    '<div class="row2">'+inp('work_hours','Work hours per day',s.work_hours,'number','min="1" max="12" step="0.5"')+sel('pay_mode','Pay mode',[['','—'],['online','Online'],['cash','Cash']],s.pay_mode||'')+'</div>'+
    inp('holdback_pct','Holdback % of salary',s.holdback_pct==null?0:s.holdback_pct,'number','min="0" max="100" step="1"','Salary ka itna % roka jata hai (sheet mein 10%).')+
+   '<div class="row2">'+inp('bank_account_no','Bank account number',s.bank_account_no,'text','inputmode="numeric"')+inp('bank_ifsc','IFSC',s.bank_ifsc,'text','maxlength="11" style="text-transform:uppercase"')+'</div>'+
+   inp('bank_account_name','Name as in bank',s.bank_account_name)+
    inp('address','Address',s.address)+
    '<div class="row2">'+inp('aadhaar_last4','Aadhaar last 4 digits',s.aadhaar_last4,'text','inputmode="numeric" maxlength="4" pattern="[0-9]{4}"','Never store the full Aadhaar number.')+sel('status','Status',[['active','Working'],['left','Left the school']],s.status||'active')+'</div>'+
    inp('notes','Notes',s.notes);
 }
 function staffPayload(fd){
-  const o={};['full_name','staff_code','designation','subjects','classes_taught','qualification','phone','email','dob','gender','joined_on','address','aadhaar_last4','notes','status'].forEach(k=>{const v=(fd.get(k)||'').trim();o[k]=v===''?null:v});
+  const o={};['full_name','staff_code','designation','subjects','classes_taught','qualification','phone','email','dob','gender','joined_on','address','aadhaar_last4','notes','status','bank_account_no','bank_ifsc','bank_account_name'].forEach(k=>{const v=(fd.get(k)||'').trim();o[k]=v===''?null:v});
+  if(o.bank_ifsc)o.bank_ifsc=o.bank_ifsc.toUpperCase();if(o.bank_account_no)o.bank_account_no=o.bank_account_no.replace(/\s/g,'');
   const sal=(fd.get('monthly_salary')||'').trim();o.monthly_salary=sal===''?null:Math.round(Number(sal));
   ['shift_start','shift_end','pay_mode'].forEach(k=>{const v=(fd.get(k)||'').trim();o[k]=v===''?null:v});
   const wh=(fd.get('work_hours')||'').trim();if(wh!=='')o.work_hours=Number(wh);
