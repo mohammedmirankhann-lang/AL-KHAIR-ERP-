@@ -911,6 +911,34 @@ async function vOldDues(el){
     formModal('Choose the current student: '+r.student_name,sel('sid','Student',[['','— none, not in school —']].concat(cand.map(x=>[x.id,x.full_name+' · '+(clsOf[x.id]||'no enrolment')+' · adm '+x.admission_no+' · '+(x.father_name||'')])),r.student_id||''),'Save',async fd=>{const v=fd.get('sid');await done(r.id,{student_id:v||null,status:v?'linked':'open'},v?'Linked':'Link removed');closeModal()},{})});
 }
 
+/* ---------- Teacher work report: what each teacher has done this month ---------- */
+async function stWork(box,B,active){
+  const m0=staffMonth+'-01',last=new Date(+staffMonth.slice(0,4),+staffMonth.slice(5,7),0).getDate(),m1=staffMonth+'-'+String(last).padStart(2,'0');
+  const [asg,att,enr,sa,mk,sub]=await Promise.all([
+    q(sb.from('teacher_assignments').select('*')),
+    q(sb.from('staff_attendance').select('staff_id,status').gte('work_date',m0).lte('work_date',m1)),
+    all((a,b)=>sb.from('enrollments').select('id,class_id').eq('academic_year_id',S.year.id).range(a,b)),
+    all((a,b)=>sb.from('student_attendance').select('enrollment_id,att_date,marked_by').gte('att_date',m0).lte('att_date',m1).range(a,b)),
+    all((a,b)=>sb.from('marks').select('entered_by,updated_at,enrollment_id,subject_id,exam_id').range(a,b)),
+    q(sb.from('marks_submissions').select('*'))]);
+  const clsOf=Object.fromEntries(enr.map(e=>[e.id,e.class_id])),cn=id=>(classById(id)||{}).name||'';
+  let wd=0;const lim=m1<today()?m1:today();for(let d=m0;d<=lim;d=dayShift(d,1))if(!isOff(B.cfg,B.holSet,d))wd++;
+  const teachers=active.filter(x=>asg.some(a=>a.staff_id===x.id));
+  const rows=teachers.map(t=>{
+    const mine=asg.filter(a=>a.staff_id===t.id),cts=mine.filter(a=>a.is_class_teacher),subs=mine.filter(a=>a.subject_id);
+    const present=att.filter(a=>a.staff_id===t.id&&['present','late','half_day'].includes(a.status)).length;
+    const dm=cts.map(a=>{const ds=new Set(sa.filter(x=>clsOf[x.enrollment_id]===a.class_id).map(x=>x.att_date));return{c:cn(a.class_id),n:ds.size}});
+    const myMarks=t.user_id?mk.filter(x=>x.entered_by===t.user_id):[];
+    const subDone=subs.filter(a=>sub.some(x=>x.class_id===a.class_id&&x.subject_id===a.subject_id)).length;
+    const lastAct=[].concat(myMarks.map(x=>x.updated_at)).sort().pop();
+    return{t,cts,subs,present,dm,marks:myMarks.length,subDone,lastAct};
+  });
+  box.innerHTML='<div class="toolbar" style="margin-bottom:10px;gap:8px"><button class="btn ghost sm" id="wp">‹</button><b style="min-width:70px;text-align:center">'+monthLabel(staffMonth)+'</b><button class="btn ghost sm" id="wn">›</button><span class="muted small">'+wd+' working days so far</span></div>'+
+   '<div class="card">'+(rows.length?'<div class="tablewrap"><table><thead><tr><th>Teacher</th><th>Own attendance</th><th>Class teacher of</th><th>Class attendance marked</th><th>Subjects</th><th class="r">Marks entered</th><th>Submitted</th><th>Login</th></tr></thead><tbody>'+
+   rows.map(r=>'<tr><td>'+esc(r.t.full_name)+'</td><td>'+r.present+' of '+wd+' days</td><td>'+(r.cts.map(a=>esc(cn(a.class_id))).join(', ')||'<span class="muted small">-</span>')+'</td><td>'+(r.dm.length?r.dm.map(d=>esc(d.c)+': '+d.n+' of '+wd+' days'+(wd&&d.n<wd?' <span class="pill warn">missing '+(wd-d.n)+'</span>':'')).join('<br>'):'<span class="muted small">-</span>')+'</td><td>'+(r.subs.length?r.subs.map(a=>esc(cn(a.class_id))).filter((v,i,x)=>x.indexOf(v)===i).join(', ')+' ('+r.subs.length+' subjects)':'<span class="muted small">-</span>')+'</td><td class="r">'+r.marks+'</td><td>'+(r.subs.length?r.subDone+' of '+r.subs.length:'<span class="muted small">-</span>')+'</td><td>'+(r.t.user_id?'<span class="pill good">Created</span>':'<span class="pill warn">No login</span>')+'</td></tr>').join('')+'</tbody></table></div>':'<p class="muted">No teachers are assigned to classes yet. Assign them in Academics &gt; Setup.</p>')+'</div>';
+  $('#wp').onclick=()=>{staffMonth=addMonth(staffMonth,-1);vStaff($('#view'))};$('#wn').onclick=()=>{staffMonth=addMonth(staffMonth,1);vStaff($('#view'))};
+}
+
 /* ---------- Owner views of what teachers enter: class attendance and marks progress ---------- */
 let acDate=today();
 async function acAttendance(box,B){
@@ -1099,12 +1127,13 @@ async function vStaff(el){
   const active=B.staff.filter(s=>s.status==='active');
   el.innerHTML=head('Staff',active.length+' active staff'+(B.cfg.geo_lat==null?' · school location not set':''),'')+
    (B.cfg.geo_lat==null?'<p class="banner" style="margin-bottom:12px">Set the school location in the Settings tab first. Teachers can punch only after that.</p>':'')+
-   '<div class="seg" role="group" aria-label="Staff view" style="justify-self:start;max-width:100%;overflow-x:auto">'+[['today','Today'],['month','Monthly'],['pay','Salary'],['dir','Staff list'],['set','Settings']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(staffTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="sbody" style="margin-top:14px;min-width:0;max-width:100%"></div>';
+   '<div class="seg" role="group" aria-label="Staff view" style="justify-self:start;max-width:100%;overflow-x:auto">'+[['today','Today'],['month','Monthly'],['work','Teacher work'],['pay','Salary'],['dir','Staff list'],['set','Settings']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(staffTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="sbody" style="margin-top:14px;min-width:0;max-width:100%"></div>';
   $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{staffTab=b.dataset.t;vStaff(el)});
   const box=$('#sbody');
   try{
     if(staffTab==='today')await stToday(box,B,active);
     else if(staffTab==='month')await stMonth(box,B,active);
+    else if(staffTab==='work')await stWork(box,B,active);
     else if(staffTab==='pay')await stPay(box,B);
     else if(staffTab==='dir')stDir(box,B);
     else stSettings(box,B);
