@@ -34,3 +34,10 @@ The owner assigns each teacher in Academics > Setup (class teacher, or subject t
 
 ## Not built yet
 Report cards, grades, AI summaries, WhatsApp sending through the official API.
+
+
+## Report cards
+- Academics > Report cards: pick a class, print one student or the whole class (3 pages each: Progress Report with PT1, Term 1, PT2, Term 2 columns; Personal & Social Traits; Arabic & Islamiyat card). Use "Save as PDF" in the print window.
+- Class teacher fills Report details (traits, remark, height, weight) per evaluation. Eval-I = first half of the exams, Eval-II = second half. Attendance: Eval-I counts up to 30 Sep, Eval-II is cumulative.
+- Subjects can have a report heading and component (Setup > Add subject), e.g. LITERACY SKILLS / Written. Arabic and Islamiyat components are on the separate Deeniyat card.
+- Grades come from the grading key: 91-100 A1, 81-90 A2, 71-80 B1, 61-70 B2, 51-60 C1, 41-50 C2, 33-40 D, below 33 E.

@@ -380,7 +380,7 @@ async function route(){
   if(!S.user)return;
   const r=currentRoute(),view=$('#view');
   if(S.user.user_metadata&&S.user.user_metadata.temp_password){$('#nav').innerHTML='';await vSetPassword(view);return}
-  if(S.profile&&S.profile.role==='teacher'){const tn=[['me','My attendance'],['attendance','Class attendance'],['marks','Marks']],tr=(r.name==='dashboard'?'me':r.name);$('#nav').innerHTML=tn.map(n=>'<a href="#/'+n[0]+'"'+(tr===n[0]?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');view.innerHTML='<p class="muted">Loading…</p>';const tf={attendance:vTAttendance,marks:vTMarks}[tr]||vMyAttendance;try{await tf(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
+  if(S.profile&&S.profile.role==='teacher'){const tn=[['me','My attendance'],['attendance','Class attendance'],['marks','Marks'],['traits','Report details']],tr=(r.name==='dashboard'?'me':r.name);$('#nav').innerHTML=tn.map(n=>'<a href="#/'+n[0]+'"'+(tr===n[0]?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');view.innerHTML='<p class="muted">Loading…</p>';const tf={attendance:vTAttendance,marks:vTMarks,traits:vTTraits}[tr]||vMyAttendance;try{await tf(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
   $('#nav').innerHTML=NAV.map(n=>'<a href="#/'+n[0]+'"'+((r.name===n[0]||(r.name==='student'&&n[0]==='students'))?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');
   const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,olddues:vOldDues,fees:vFees,accounts:vAccounts,trends:vTrends,import:vImport}[r.name]||vDashboard;
   view.innerHTML='<p class="muted">Loading…</p>';
@@ -1020,6 +1020,146 @@ async function vTMarks(el){
   }
 }
 
+/* ---------- Report cards: traits entry (class teacher), owner Report cards tab, printable A4 cards ---------- */
+const RC_TRAITS=['Language','Regularity','Activeness','Sense of Responsibility','Confidence','Obedience','Sharing & Caring','Cleanliness','Discipline','Sports','Participation in School Programmes'];
+const RC_GRADES=['A1','A2','B1','B2','C1','C2','D','E'];
+const RC_REMARK={A1:'Outstanding',A2:'Excellent',B1:'Very Good',B2:'Good',C1:'Average',C2:'Satisfactory',D:'Below Average',E:'Needs Improvement'};
+const rcGrade=p=>p==null||isNaN(p)?'':p>=91?'A1':p>=81?'A2':p>=71?'B1':p>=61?'B2':p>=51?'C1':p>=41?'C2':p>=33?'D':'E';
+const rcN=v=>{const n=Math.round(num(v)*10)/10;return String(n)};
+let tX={cls:'',ev:1};
+async function vTTraits(el){
+  const cts=(await rpc('teacher_my_assignments')).filter(a=>a.is_class_teacher);
+  if(!cts.length){el.innerHTML=head('Report details')+'<div class="card empty">You are not assigned as a class teacher yet. Ask the principal to assign your class.</div>';return}
+  if(!cts.find(a=>a.class_id===tX.cls))tX.cls=cts[0].class_id;
+  const [roster,rows]=await Promise.all([rpc('teacher_roster',{p_class:tX.cls}),rpc('teacher_get_extras',{p_class:tX.cls,p_eval:tX.ev})]);
+  const by=Object.fromEntries((rows||[]).map(r=>[r.enrollment_id,r]));
+  const opt=(list,v)=>'<option value=""></option>'+list.map(g=>'<option'+(g===v?' selected':'')+'>'+g+'</option>').join('');
+  el.innerHTML=head('Report details','Personal and social traits, remark, height and weight for the report card')+
+   '<div class="card"><div class="row2" style="align-items:end">'+(cts.length>1?sel('xc','Class',cts.map(a=>[a.class_id,a.class_name]),tX.cls):'<div><b>'+esc(cts[0].class_name)+'</b></div>')+sel('xe','Evaluation',[[1,'Evaluation I (Eval-I)'],[2,'Evaluation II (Eval-II)']],tX.ev)+'</div>'+
+   '<p class="muted small" style="margin:8px 0">Tip: use the first row to fill one trait for the whole class, then change individual students.</p>'+
+   '<div class="tablewrap"><table><thead><tr><th>Roll</th><th>Name</th>'+RC_TRAITS.map(t=>'<th style="min-width:74px;font-size:11px;white-space:normal">'+esc(t)+'</th>').join('')+'<th>Remark</th><th>Height (cm)</th><th>Weight (kg)</th></tr>'+
+   '<tr><td></td><td class="small muted">Fill whole class</td>'+RC_TRAITS.map((t,i)=>'<td><select class="input xfill" data-t="'+i+'" style="padding:4px">'+opt(RC_GRADES,'')+'</select></td>').join('')+'<td></td><td></td><td></td></tr></thead><tbody>'+
+   roster.map(r=>{const x=by[r.enrollment_id]||{},tr=x.traits||{};return'<tr><td>'+(r.roll_no||'')+'</td><td class="nowrap">'+esc(r.full_name)+'</td>'+RC_TRAITS.map((t,i)=>'<td><select class="input xt" data-e="'+r.enrollment_id+'" data-t="'+i+'" style="padding:4px">'+opt(RC_GRADES,tr[t])+'</select></td>').join('')+
+    '<td><select class="input xr" data-e="'+r.enrollment_id+'" style="padding:4px">'+opt(Object.values(RC_REMARK),x.remark||'')+'</select></td><td><input class="input xh" data-e="'+r.enrollment_id+'" type="number" min="0" step="0.1" value="'+(x.height_cm==null?'':x.height_cm)+'" style="width:80px"></td><td><input class="input xw" data-e="'+r.enrollment_id+'" type="number" min="0" step="0.1" value="'+(x.weight_kg==null?'':x.weight_kg)+'" style="width:80px"></td></tr>'}).join('')+'</tbody></table></div>'+
+   '<div style="margin-top:12px"><button class="btn" id="xSave">Save</button></div></div>';
+  if($('#xc'))$('#xc').onchange=e=>{tX.cls=e.target.value;vTTraits(el)};
+  $('#xe').onchange=e=>{tX.ev=Number(e.target.value);vTTraits(el)};
+  $$('.xfill').forEach(s=>s.onchange=()=>{if(s.value)$$('.xt[data-t="'+s.dataset.t+'"]').forEach(i=>i.value=s.value)});
+  $('#xSave').onclick=async()=>{try{
+    const out=roster.map(r=>{const tr={};$$('.xt[data-e="'+r.enrollment_id+'"]').forEach(i=>{if(i.value)tr[RC_TRAITS[i.dataset.t]]=i.value});
+      return{enrollment_id:r.enrollment_id,traits:tr,remark:$('.xr[data-e="'+r.enrollment_id+'"]').value,height_cm:$('.xh[data-e="'+r.enrollment_id+'"]').value,weight_kg:$('.xw[data-e="'+r.enrollment_id+'"]').value}});
+    const n=await rpc('teacher_save_extras',{p_class:tX.cls,p_eval:tX.ev,p_rows:out});toast('Saved for '+n+' students')}catch(e){toast(errMsg(e),true)}};
+}
+
+const RC_CSS=[
+'@page{size:A4;margin:0}:root{--navy:#1F3A5F;--gold:#C4A55A;--th:#12456F}*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
+'body{margin:0;font-family:Lato,Carlito,sans-serif;color:#111;font-size:11px}',
+'.page{width:210mm;height:297mm;position:relative;overflow:hidden;page-break-after:always;break-after:page}.page:last-child{page-break-after:auto;break-after:auto}',
+'.dise{position:absolute;right:13mm;top:5mm;font-weight:700;font-size:10px}',
+'.hdr{position:absolute;left:0;right:0;top:11mm;height:28mm}',
+'.hdr .bar{position:absolute;left:34mm;right:0;top:3mm;height:17mm;background:var(--navy);color:var(--gold);text-align:center}',
+'.hdr .bar b{display:block;font-family:Cinzel,serif;font-weight:700;font-size:23px;letter-spacing:1px;margin-top:2.5mm}',
+'.hdr .bar i{display:block;color:#fff;font-size:9px;text-align:right;padding-right:10mm}',
+'.hdr .stripe{position:absolute;left:34mm;right:0;top:21mm;height:2.2mm;background:var(--gold)}',
+'.hdr .line{position:absolute;left:0;right:0;top:27mm;border-top:1px solid var(--gold)}',
+'.hdr .dot{position:absolute;left:50%;top:25mm;width:4mm;height:4mm;border-radius:50%;background:var(--gold);margin-left:-2mm}',
+'.hdr img{position:absolute;left:8mm;top:-5mm;width:27mm}',
+'.body{position:absolute;left:13mm;right:13mm;top:45mm;bottom:38mm}',
+'h1{font-family:Cinzel,serif;font-weight:700;color:var(--navy);text-align:center;margin:0;font-size:22px;letter-spacing:1px}',
+'.sub{font-family:Cinzel,serif;color:var(--navy);text-align:center;font-size:12px;margin:2px 0 7px}',
+'.det{display:grid;grid-template-columns:1fr 62mm;gap:4px 14px;margin:4px 0 8px;font-size:11.5px;color:var(--navy);font-weight:700}',
+'.det span{border-bottom:1px dotted #333;color:#111;font-weight:400;margin-left:4px;display:inline-block;min-width:58%;padding-left:2px}',
+'table{width:100%;border-collapse:collapse;border:2px solid #111;margin-bottom:8px}',
+'th{background:var(--th);color:#fff;font-family:Cinzel,serif;font-weight:500;font-size:10px;padding:4px 3px;border:1px solid #fff}',
+'td{border:1px solid #9a9a9a;padding:2.5px 5px;text-align:center;height:18px}td.l{text-align:left}',
+'td.g{font-weight:700;color:var(--navy);text-align:left;background:#f4f6fa}tr.tot td{font-weight:700;background:#eef1f7}',
+'.dense td{height:14.5px;padding:1px 4px;font-size:10px}.dense th{padding:3px 2px}',
+'.sec{background:var(--navy);color:#fff;font-family:Cinzel,serif;text-align:center;padding:4px;font-size:12px}',
+'.res{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:7px}.res div{border:2px solid var(--gold);padding:5px 8px;text-align:center}',
+'.res b{color:var(--navy);display:block;font-family:Cinzel,serif;font-size:11px}.res big{font-size:15px;font-weight:700}',
+'.promo{border:1px solid var(--gold);padding:5px 10px;font-size:11.5px}.note{font-size:9px;text-align:center;color:#555;margin-top:3px}',
+'.signs{position:absolute;left:13mm;right:13mm;bottom:25mm;display:flex;justify-content:space-between;color:var(--navy);font-weight:700;font-size:11.5px;border-top:1px solid var(--gold);padding-top:4px}',
+'.ftr{position:absolute;left:0;right:0;bottom:0;height:16mm;background:var(--navy);color:#fff;text-align:center;font-size:9px;padding-top:4mm;line-height:1.5}'
+].join('');
+const RC_HDR='<div class="dise">DISE CODE - 23260104272</div><div class="hdr"><img src="'+location.origin+'/logo.png"><div class="bar"><b>Al-Khair Academy</b><i>Success Here and the Hereafter</i></div><div class="stripe"></div><div class="line"></div><div class="dot"></div></div>';
+const RC_FTR='<div class="ftr">57/2, Haji Colony, Nipaniya Road, Khajrana, Indore (M.P.) 452016<br>Mob. 6264672034 &nbsp;|&nbsp; alkhair.indore@gmail.com</div>';
+const rcSigns=l=>'<div class="signs"><div>'+l+'</div><div>Coordinator\'s Sign:</div><div>Principal\'s Sign:</div></div>';
+
+async function rcLoad(B){
+  const cid=acSel.cls,cls=classById(cid);
+  const en=(await q(sb.from('enrollments').select('id,roll_no,students(full_name,admission_no,father_name,mother_name,dob)').eq('academic_year_id',S.year.id).eq('class_id',cid).eq('status','enrolled'))).sort((a,b)=>(a.roll_no||999)-(b.roll_no||999)||a.students.full_name.localeCompare(b.students.full_name));
+  const ids=en.map(e=>e.id);
+  let mk=[],ex=[],at=[];
+  if(ids.length){[mk,ex,at]=await Promise.all([
+    all((a,b)=>sb.from('marks').select('enrollment_id,exam_id,subject_id,marks,max_marks,absent').in('enrollment_id',ids).range(a,b)),
+    q(sb.from('report_extras').select('*').in('enrollment_id',ids)),
+    all((a,b)=>sb.from('student_attendance').select('enrollment_id,att_date,status').in('enrollment_id',ids).range(a,b))])}
+  const subs=B.subjOf(cid),yr=String(S.year.starts_on||today()).slice(0,4);
+  const mkBy={};mk.forEach(m=>{mkBy[m.enrollment_id+'|'+m.exam_id+'|'+m.subject_id]=m});
+  const exBy={};ex.forEach(x=>{exBy[x.enrollment_id+'|'+x.eval]=x});
+  const attBy={};at.forEach(a=>{(attBy[a.enrollment_id]=attBy[a.enrollment_id]||[]).push(a)});
+  return{cls,en,exams:B.exams,main:subs.filter(s=>s.card!=='deeniyat'),deen:subs.filter(s=>s.card==='deeniyat'),mkBy,exBy,attBy,cut:yr+'-09-30'};
+}
+const rcEval=(D,i)=>i<Math.ceil(D.exams.length/2)?1:2;
+function rcAtt(D,e,ev){const r=D.attBy[e.id]||[];const use=ev===1?r.filter(a=>a.att_date<=D.cut):r;if(!use.length)return'';return use.filter(a=>a.status==='present'||a.status==='late').length+' / '+use.length}
+function rcCard(D,e){
+  const st=e.students,n=D.exams.length;
+  const det='<div class="det"><div>STUDENT\'S NAME :<span>'+esc(st.full_name)+'</span></div><div>CLASS :<span>'+esc(D.cls.name)+'</span></div><div>FATHER\'S NAME :<span>'+esc(st.father_name||'')+'</span></div><div>DOB :<span>'+(st.dob?fmtDate(st.dob):'')+'</span></div><div>MOTHER\'S NAME :<span>'+esc(st.mother_name||'')+'</span></div><div>SCHOLAR NO. :<span>'+esc(st.admission_no||'')+'</span></div></div>';
+  const cell=(sid,ex)=>{const m=D.mkBy[e.id+'|'+ex.id+'|'+sid];if(!m)return'–';if(m.absent)return'AB';if(m.marks==null)return'–';return rcN(m.marks)+'/'+rcN(m.max_marks)+' &middot; '+rcGrade(num(m.marks)/num(m.max_marks)*100)};
+  const groups=[],gi={};D.main.forEach(s=>{const g=s.report_group||s.name;if(!gi[g]){gi[g]={name:g,items:[]};groups.push(gi[g])}gi[g].items.push(s)});
+  let rows='',nrows=0;
+  groups.forEach(g=>{const flat=g.items.length===1&&!g.items[0].component;
+    if(flat){rows+='<tr><td class="l"><b>'+esc(g.name)+'</b></td>'+D.exams.map(x=>'<td>'+cell(g.items[0].id,x)+'</td>').join('')+'</tr>';nrows++}
+    else{rows+='<tr><td class="g" colspan="'+(n+1)+'">'+esc(g.name)+'</td></tr>';nrows++;g.items.forEach(s=>{rows+='<tr><td class="l">'+esc(s.component||s.name)+'</td>'+D.exams.map(x=>'<td>'+cell(s.id,x)+'</td>').join('')+'</tr>';nrows++})}});
+  const tot=ex=>{let t=0,m=0,any=false;D.main.forEach(s=>{const k=D.mkBy[e.id+'|'+ex.id+'|'+s.id];if(k&&!k.absent&&k.marks!=null){t+=num(k.marks);m+=num(k.max_marks);any=true}});return any?{t,m,p:t/m*100}:null};
+  const totRow='<tr class="tot"><td class="l">TOTAL / GRADE</td>'+D.exams.map(x=>{const r=tot(x);return'<td>'+(r?rcN(r.t)+'/'+rcN(r.m)+' &middot; '+rcGrade(r.p):'–')+'</td>'}).join('')+'</tr>';
+  const evl=ev=>{let t=0,m=0;D.exams.forEach((x,i)=>{if(rcEval(D,i)!==ev)return;const r=tot(x);if(r){t+=r.t;m+=r.m}});return m?rcGrade(t/m*100):''};
+  const g1=evl(1),g2=evl(2);
+  const p1='<div class="page'+(nrows>17?' dense':'')+'">'+RC_HDR+'<div class="body"><h1>PROGRESS REPORT</h1><div class="sub">Session '+esc(S.year.label)+' &nbsp;&middot;&nbsp; Marksheet of '+esc(D.cls.name)+'</div>'+det+
+   '<table><tr><th style="width:30%">Academic Achievement</th>'+D.exams.map(x=>'<th>'+esc(x.name)+'<br><span style="font-size:8px">marks &middot; grade</span></th>').join('')+'</tr>'+rows+totRow+'</table>'+
+   '<div class="res"><div><b>Evaluation I</b><big>'+(g1?'Grade '+g1:'–')+'</big> '+(g1?'&middot; '+RC_REMARK[g1]:'')+'</div><div><b>Evaluation II</b><big>'+(g2?'Grade '+g2:'–')+'</big> '+(g2?'&middot; '+RC_REMARK[g2]:'')+'</div></div>'+
+   '<div class="promo">Promoted to Class: ____________________ &nbsp;&middot;&nbsp; New session begins on: ____________________ &nbsp;&middot;&nbsp; Place: <b>Indore</b></div>'+(D.deen.length?'<div class="note">Arabic &amp; Islamiyat marks are on the separate Deeniyat report card.</div>':'')+'</div>'+rcSigns('Class Teacher\'s Sign:')+RC_FTR+'</div>';
+  const x1=D.exBy[e.id+'|1']||{traits:{}},x2=D.exBy[e.id+'|2']||{traits:{}};
+  const p2='<div class="page">'+RC_HDR+'<div class="body"><h1>PERSONAL &amp; SOCIAL TRAITS</h1><div class="sub">'+esc(st.full_name)+' &nbsp;&middot;&nbsp; '+esc(D.cls.name)+' &nbsp;&middot;&nbsp; Session '+esc(S.year.label)+'</div>'+
+   '<table><tr><th style="width:56%">Particular</th><th>Eval-I</th><th>Eval-II</th></tr>'+RC_TRAITS.map(t=>'<tr><td class="l">'+esc(t)+'</td><td>'+esc((x1.traits||{})[t]||'')+'</td><td>'+esc((x2.traits||{})[t]||'')+'</td></tr>').join('')+
+   '<tr><th>Particular</th><th>Eval-I</th><th>Eval-II</th></tr><tr><td class="l">Remark</td><td>'+esc((x1.remark||'').toUpperCase())+'</td><td>'+esc((x2.remark||'').toUpperCase())+'</td></tr>'+
+   '<tr><td class="l">Attendance</td><td>'+rcAtt(D,e,1)+'</td><td>'+rcAtt(D,e,2)+'</td></tr><tr><td class="l">Height (cms)</td><td>'+(x1.height_cm==null?'':rcN(x1.height_cm))+'</td><td>'+(x2.height_cm==null?'':rcN(x2.height_cm))+'</td></tr><tr><td class="l">Weight (kg)</td><td>'+(x1.weight_kg==null?'':rcN(x1.weight_kg))+'</td><td>'+(x2.weight_kg==null?'':rcN(x2.weight_kg))+'</td></tr></table>'+
+   '<div class="sec">GRADING KEY</div><table style="margin-top:0"><tr><th>Range</th><th>Grade</th><th>Remark</th></tr>'+[['91 - 100','A1'],['81 - 90','A2'],['71 - 80','B1'],['61 - 70','B2'],['51 - 60','C1'],['41 - 50','C2'],['33 - 40','D'],['32 &amp; below','E']].map(r=>'<tr><td>'+r[0]+'</td><td>'+r[1]+'</td><td>'+RC_REMARK[r[1]]+'</td></tr>').join('')+'</table></div>'+rcSigns('Class Teacher\'s Sign:')+RC_FTR+'</div>';
+  let p3='';
+  if(D.deen.length){
+    const ix=(re,fb)=>D.exams.find(x=>re.test(x.name))||D.exams[fb],t1=ix(/term\s*1/i,1),t2=ix(/term\s*2/i,3),gs=[],gj={};
+    D.deen.forEach(s=>{const g=s.report_group||s.name;if(!gj[g]){gj[g]={name:g,items:[]};gs.push(gj[g])}gj[g].items.push(s)});
+    const v=(s,x)=>x?D.mkBy[e.id+'|'+x.id+'|'+s.id]:null;
+    p3='<div class="page">'+RC_HDR+'<div class="body"><h1>REPORT CARD</h1><div class="sub">Arabic &amp; Islamiyat &nbsp;&middot;&nbsp; Session '+esc(S.year.label)+'</div>'+det+
+     gs.map(g=>{let a=[0,0,0,0];return'<table><tr><th style="width:34%">'+esc(g.name)+'</th><th>Term 1 MM</th><th>Term 1 OBT</th><th>Term 2 MM</th><th>Term 2 OBT</th></tr>'+g.items.map(s=>{const m1=v(s,t1),m2=v(s,t2),c=(m,k)=>m?(k==='mm'?rcN(m.max_marks):(m.absent?'AB':m.marks==null?'':rcN(m.marks))):'';
+        if(m1){a[0]+=num(m1.max_marks);if(!m1.absent)a[1]+=num(m1.marks)}if(m2){a[2]+=num(m2.max_marks);if(!m2.absent)a[3]+=num(m2.marks)}
+        return'<tr><td>'+esc(s.component||s.name)+'</td><td>'+c(m1,'mm')+'</td><td>'+c(m1,'obt')+'</td><td>'+c(m2,'mm')+'</td><td>'+c(m2,'obt')+'</td></tr>'}).join('')+'<tr class="tot"><td>Total</td><td>'+(a[0]?rcN(a[0]):'')+'</td><td>'+(a[0]?rcN(a[1]):'')+'</td><td>'+(a[2]?rcN(a[2]):'')+'</td><td>'+(a[2]?rcN(a[3]):'')+'</td></tr></table>'}).join('')+'</div>'+rcSigns('Teacher Sign:')+RC_FTR+'</div>';
+  }
+  return p1+p2+p3;
+}
+function rcPrint(D,onlyId){
+  const w=window.open('','_blank');if(!w){toast('Please allow pop-ups to print report cards',true);return}
+  const list=D.en.filter(e=>!onlyId||e.id===onlyId);
+  w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Report Cards - '+esc(D.cls.name)+'</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Lato:wght@400;700&display=swap"><style>'+RC_CSS+'</style></head><body>'+list.map(e=>rcCard(D,e)).join('')+'</body></html>');
+  w.document.close();setTimeout(()=>{try{w.focus();w.print()}catch(x){}},1200);
+}
+async function acReport(box,B){
+  box.innerHTML='<div class="row2" style="align-items:end">'+sel('acC','Class',S.classes.map(c=>[c.id,c.name]),acSel.cls)+'</div><p class="muted" style="margin-top:12px">Loading…</p>';
+  $('#acC').onchange=e=>{acSel.cls=e.target.value;acSel.subj='';vAcademics($('#view'))};
+  const D=await rcLoad(B),nm=D.main.length+D.deen.length,want=nm*D.exams.length;
+  const cnt=e=>{let k=0;D.main.concat(D.deen).forEach(s=>D.exams.forEach(x=>{const m=D.mkBy[e.id+'|'+x.id+'|'+s.id];if(m&&(m.marks!=null||m.absent))k++}));return k};
+  const hasX=(e,ev)=>{const x=D.exBy[e.id+'|'+ev];return x&&(Object.keys(x.traits||{}).length||x.remark)};
+  box.innerHTML='<div class="row2" style="align-items:end">'+sel('acC','Class',S.classes.map(c=>[c.id,c.name]),acSel.cls)+'</div>'+
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>'+esc(D.cls.name)+' · report cards · '+D.en.length+' students</h2><button class="btn" id="rcAll"'+(D.en.length?'':' disabled')+'>Print whole class</button></div>'+
+   '<p class="muted small" style="margin-bottom:8px">Each student gets 3 pages: Progress Report, Personal &amp; Social Traits'+(D.deen.length?', and the Arabic &amp; Islamiyat card':'')+'. In the print window choose &quot;Save as PDF&quot; to get a file. Marks come from the teachers\' entries. Traits, remark, height and weight come from the class teacher (Report details).</p>'+
+   (nm?'':'<p class="banner">No subjects are set for this class. Add them in the Setup tab.</p>')+
+   '<div class="tablewrap"><table><thead><tr><th>Roll</th><th>Name</th><th class="r">Marks entered</th><th>Traits Eval-I</th><th>Traits Eval-II</th><th></th></tr></thead><tbody>'+
+   D.en.map(e=>'<tr><td>'+(e.roll_no||'')+'</td><td>'+esc(e.students.full_name)+'</td><td class="r">'+cnt(e)+' / '+want+'</td><td>'+(hasX(e,1)?'<span class="pill good">Filled</span>':'<span class="pill neutral">Pending</span>')+'</td><td>'+(hasX(e,2)?'<span class="pill good">Filled</span>':'<span class="pill neutral">Pending</span>')+'</td><td class="r"><button class="btn ghost sm" data-pr="'+e.id+'">Print</button></td></tr>').join('')+'</tbody></table></div></div>';
+  $('#acC').onchange=e=>{acSel.cls=e.target.value;acSel.subj='';vAcademics($('#view'))};
+  $('#rcAll').onclick=()=>rcPrint(D);
+  $$('[data-pr]').forEach(b=>b.onclick=()=>rcPrint(D,b.dataset.pr));
+}
+
 /* ---------- Reminders: fee and document messages (WhatsApp links, no API needed) ---------- */
 let remTab='fees',remCls='all',remMin=1;
 const REM_FEES="Assalamu Alaikum {parent},\nThis is a gentle reminder from Al-Khair Academy that the fee of Rs {due} for {student} (Class {class}) is pending. Please deposit it at your earliest convenience. Thank you.\n- Al-Khair Academy";
@@ -1055,10 +1195,11 @@ async function vReminders(el){
 /* ---------- Academics: exams, marks entry, results, subject setup ---------- */
 let acTab='marks',acSel={cls:'',exam:'',subj:''};
 async function acBase(){
-  const [subjects,cs,exams]=await Promise.all([
+  const [subjects0,cs,exams]=await Promise.all([
     q(sb.from('subjects').select('*').order('sort_order').order('name')),
     q(sb.from('class_subjects').select('*')),
     q(sb.from('exams').select('*').eq('academic_year_id',S.year.id).order('sort_order'))]);
+  const subjects=subjects0.filter(x=>x.card!=='retired');
   return{subjects,cs,exams,subjOf:cid=>cs.filter(x=>x.class_id===cid).map(x=>subjects.find(y=>y.id===x.subject_id)).filter(Boolean).sort((a,b)=>a.sort_order-b.sort_order)};
 }
 async function vAcademics(el){
@@ -1066,10 +1207,10 @@ async function vAcademics(el){
   if(!acSel.cls)acSel.cls=S.classes[0].id;
   if(!acSel.exam&&B.exams[0])acSel.exam=B.exams[0].id;
   el.innerHTML=head('Academics','Session '+S.year.label+' · '+B.exams.map(e=>e.short_name).join(', '))+
-   '<div class="seg" role="group" style="justify-self:start">'+[['marks','Enter marks'],['res','Results'],['att','Attendance'],['prog','Progress'],['set','Setup']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(acTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="abody" style="margin-top:14px;min-width:0"></div>';
+   '<div class="seg" role="group" style="justify-self:start">'+[['marks','Enter marks'],['res','Results'],['att','Attendance'],['prog','Progress'],['rc','Report cards'],['set','Setup']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(acTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="abody" style="margin-top:14px;min-width:0"></div>';
   $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{acTab=b.dataset.t;vAcademics(el)});
   const box=$('#abody');
-  try{if(acTab==='marks')await acMarks(box,B);else if(acTab==='res')await acResults(box,B);else if(acTab==='att')await acAttendance(box,B);else if(acTab==='prog')await acProgress(box,B);else await acSetup(box,B)}catch(e){box.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}
+  try{if(acTab==='marks')await acMarks(box,B);else if(acTab==='res')await acResults(box,B);else if(acTab==='att')await acAttendance(box,B);else if(acTab==='prog')await acProgress(box,B);else if(acTab==='rc')await acReport(box,B);else await acSetup(box,B)}catch(e){box.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}
 }
 const acPicker=(B,withSubj)=>'<div class="row2" style="align-items:end">'+sel('acC','Class',S.classes.map(c=>[c.id,c.name]),acSel.cls)+sel('acE','Exam',B.exams.map(e=>[e.id,e.name]),acSel.exam)+'</div>'+(withSubj?sel('acS','Subject',B.subjOf(acSel.cls).map(x=>[x.id,x.name]),acSel.subj):'');
 function acBind(el,withSubj){
@@ -1120,7 +1261,7 @@ async function acSetup(box,B){
   $$('[data-ad]').forEach(b=>b.onclick=async()=>{try{await q(sb.from('teacher_assignments').delete().eq('id',b.dataset.ad));toast('Removed');vAcademics($('#view'))}catch(e){toast(errMsg(e),true)}});
   $$('input[data-c]').forEach(i=>i.onchange=async()=>{try{if(i.checked)await q(sb.from('class_subjects').upsert({class_id:i.dataset.c,subject_id:i.dataset.s}));else await q(sb.from('class_subjects').delete().eq('class_id',i.dataset.c).eq('subject_id',i.dataset.s));toast('Saved')}catch(e){toast(errMsg(e),true);i.checked=!i.checked}});
   $$('input[data-ex]').forEach(i=>i.onchange=async()=>{try{await q(sb.from('exams').update({default_max:Number(i.value)}).eq('id',i.dataset.ex));toast('Saved')}catch(e){toast(errMsg(e),true)}});
-  $('#acAdd').onclick=()=>formModal('Add subject',inp('name','Subject name','','text','required'),'Add',async fd=>{await q(sb.from('subjects').insert({name:fd.get('name').trim(),sort_order:B.subjects.length+1}));closeModal();vAcademics($('#view'))},{});
+  $('#acAdd').onclick=()=>formModal('Add subject',inp('name','Subject name','','text','required')+inp('report_group','Report card heading (optional)','','text','','Subjects with the same heading are grouped under it, e.g. LITERACY SKILLS')+inp('component','Component (optional)','','text','','e.g. Written, Oral, Project')+sel('card','Report card',[['main','Main progress report'],['deeniyat','Arabic & Islamiyat card']],'main'),'Add',async fd=>{await q(sb.from('subjects').insert({name:fd.get('name').trim(),sort_order:B.subjects.length+1,report_group:(fd.get('report_group')||'').trim().toUpperCase()||null,component:(fd.get('component')||'').trim()||null,card:fd.get('card')}));closeModal();vAcademics($('#view'))},{});
 }
 
 async function vStaff(el){
