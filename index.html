@@ -359,12 +359,13 @@ const sel=(id,label,opts,val,extra)=>fld(id,label,'<select class="input" id="'+i
 const S={year:null,years:[],classes:[],heads:[],accounts:[],docTypes:[],user:null,profile:null};
 const HEAD_ORDER=['TUITION','EXAM','ACTIVITY','COMPUTER','ADMISSION','ANNUAL','TRANSPORT','OTHER'];
 async function loadRef(){
+  const coord=S.profile&&S.profile.role==='coordinator',none=Promise.resolve({data:[],error:null});
   const [y,c,h,a,d]=await Promise.all([
     sb.from('academic_years').select('*').order('starts_on',{ascending:false}),
     sb.from('classes').select('*').order('sort_order'),
-    sb.from('fee_heads').select('*').eq('is_active',true),
-    sb.from('accounts').select('*').eq('is_active',true).order('code'),
-    sb.from('document_types').select('*').eq('is_active',true).order('required_from_order')]);
+    coord?none:sb.from('fee_heads').select('*').eq('is_active',true),
+    coord?none:sb.from('accounts').select('*').eq('is_active',true).order('code'),
+    coord?none:sb.from('document_types').select('*').eq('is_active',true).order('required_from_order')]);
   for(const r of [y,c,h,a,d])if(r.error)throw r.error;
   S.years=y.data;S.year=y.data.find(x=>x.is_current)||y.data[0];S.classes=c.data;
   S.heads=h.data.sort((p,q)=>HEAD_ORDER.indexOf(p.code)-HEAD_ORDER.indexOf(q.code));S.accounts=a.data;S.docTypes=d.data;
@@ -375,14 +376,22 @@ const summaryRows=()=>all((a,b)=>sb.from('v_student_fee_summary').select('*').eq
 
 /* ---------- routing ---------- */
 const NAV=[['dashboard','Dashboard'],['students','Students'],['documents','Documents'],['staff','Staff'],['academics','Academics'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['finance','Finance'],['trends','Trends'],['import','Import']];
+const ROLE_LABEL={owner:'Owner',accountant:'Accounts and Administration',coordinator:'Coordinator',teacher:'Teacher'};
+const NAV_BY_ROLE={
+  owner:NAV,
+  accountant:[['dashboard','Dashboard'],['students','Students'],['documents','Documents'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['import','Import']],
+  coordinator:[['home','Home'],['academics','Classes'],['staff','Teachers']]};
 function currentRoute(){const h=location.hash.replace(/^#\/?/,'').split('/');return{name:h[0]||'dashboard',arg:h[1]?decodeURIComponent(h[1]):null}}
 async function route(){
   if(!S.user)return;
   const r=currentRoute(),view=$('#view');
   if(S.user.user_metadata&&S.user.user_metadata.temp_password){$('#nav').innerHTML='';await vSetPassword(view);return}
   if(S.profile&&S.profile.role==='teacher'){const tn=[['me','My attendance'],['attendance','Class attendance'],['marks','Marks'],['traits','Report details']],tr=(r.name==='dashboard'?'me':r.name);$('#nav').innerHTML=tn.map(n=>'<a href="#/'+n[0]+'"'+(tr===n[0]?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');view.innerHTML='<p class="muted">Loading…</p>';const tf={attendance:vTAttendance,marks:vTMarks,traits:vTTraits}[tr]||vMyAttendance;try{await tf(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
-  $('#nav').innerHTML=NAV.map(n=>'<a href="#/'+n[0]+'"'+((r.name===n[0]||(r.name==='student'&&n[0]==='students'))?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');
-  const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,olddues:vOldDues,fees:vFees,accounts:vAccounts,finance:vFinance,trends:vTrends,import:vImport}[r.name]||vDashboard;
+  const role=(S.profile&&S.profile.role)||'owner',nav=NAV_BY_ROLE[role]||NAV;
+  const okNames=nav.map(n=>n[0]).concat(role==='coordinator'?[]:['student','olddues']);
+  if(!okNames.includes(r.name)){r.name=nav[0][0];r.arg=null}
+  $('#nav').innerHTML=nav.map(n=>'<a href="#/'+n[0]+'"'+((r.name===n[0]||(r.name==='student'&&n[0]==='students'))?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');
+  const fn={home:vCoordHome,dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,olddues:vOldDues,fees:vFees,accounts:vAccounts,finance:vFinance,trends:vTrends,import:vImport}[r.name]||vDashboard;
   view.innerHTML='<p class="muted">Loading…</p>';
   try{await fn(view,r.arg);}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted" style="margin-top:6px">'+esc(errMsg(e))+'</p><p style="margin-top:10px"><button class="btn" onclick="route()">Try again</button></p></div>'}
   window.scrollTo(0,0);
@@ -416,6 +425,7 @@ async function vDashboard(el){
   if(dueStudents)alerts.push(['warn','Dues',dueStudents+' students have fee dues of '+inr(out)+' in total.']);
   if(missStudents)alerts.push(['warn','Documents',missStudents+' students have documents missing.']);
   try{const pm=addMonth(today().slice(0,7),-1)+'-01',[pl,at,stf]=await Promise.all([q(sb.from('payroll_lines').select('status').eq('month',pm)),q(sb.from('staff_attendance').select('status').eq('work_date',today())),q(sb.from('staff').select('id').eq('status','active'))]);
+    if(S.profile.role==='owner'){const sm=await q(sb.from('staff_attendance_months').select('month').eq('month',pm));if(!sm.length)alerts.push(['warn','Attendance',monthLabel(pm.slice(0,7))+' attendance report has not been submitted by the coordinator yet. Salary waits for it.'])}
     const dr=pl.filter(l=>l.status==='draft').length;if(dr)alerts.push(['warn','Salary',monthLabel(pm.slice(0,7))+' salary: '+dr+' staff still unpaid. See Staff > Salary.']);
     if(stf.length)alerts.push(['neutral','Staff','Today '+at.filter(a=>['present','late','half_day'].includes(a.status)).length+' of '+stf.length+' staff are in school.'])}catch(e){}
   alerts.push([tied?'good':'bad','Books',tied?'Fee ledger and student balances agree.':'Fee ledger differs from student balances by '+inr(ck.difference)+'. Check Accounts.']);
@@ -1044,10 +1054,12 @@ const DAYN=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 let staffTab='today',staffMonth=today().slice(0,7);
 const hhmm=ts=>ts?new Date(ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true}):'';
 const stPill=s=>{const x=ST_LABEL[s];return x?'<span class="pill '+x[1]+'">'+x[0]+'</span>':''};
+const staffTbl=()=>S.profile&&S.profile.role==='coordinator'?'v_staff_directory':'staff';
 async function staffBase(){
+  const coord=S.profile&&S.profile.role==='coordinator';
   const [staff,cfg,hol]=await Promise.all([
-    q(sb.from('staff').select('*').order('full_name')),
-    q(sb.from('school_settings').select('*').limit(1).single()),
+    q(sb.from(coord?'v_staff_directory':'staff').select('*').order('full_name')),
+    q(sb.from(coord?'v_attendance_settings':'school_settings').select('*').limit(1).single()),
     q(sb.from('school_holidays').select('*').order('holiday_on'))]);
   return{staff,cfg,hol,holSet:Object.fromEntries(hol.map(h=>[h.holiday_on,h.name]))};
 }
@@ -1114,7 +1126,7 @@ async function acAttendance(box,B){
     all((a,b)=>sb.from('enrollments').select('id,class_id,roll_no,students(full_name,admission_no)').eq('academic_year_id',S.year.id).range(a,b)),
     q(sb.from('student_attendance').select('enrollment_id,status,marked_by,updated_at').eq('att_date',acDate)),
     q(sb.from('teacher_assignments').select('class_id,staff_id').eq('is_class_teacher',true).eq('academic_year_id',S.year.id)),
-    q(sb.from('staff').select('id,full_name'))]);
+    q(sb.from(staffTbl()).select('id,full_name'))]);
   const sNm=Object.fromEntries(stf.map(x=>[x.id,x.full_name])),by=Object.fromEntries(at.map(a=>[a.enrollment_id,a]));
   const rows=S.classes.map(c=>{const es=en.filter(e=>e.class_id===c.id),m=es.filter(e=>by[e.id]),cnt=k=>m.filter(e=>by[e.id].status===k).length;return{c,es,n:es.length,m:m.length,p:cnt('present'),a:cnt('absent'),l:cnt('late'),v:cnt('leave'),ct:asg.filter(x=>x.class_id===c.id).map(x=>sNm[x.staff_id]).filter(Boolean).join(', ')}});
   const tot=k=>sum(rows.map(r=>r[k]));
@@ -1134,7 +1146,7 @@ async function acProgress(box,B){
     all((a,b)=>sb.from('marks').select('enrollment_id,subject_id,entered_by,updated_at').eq('exam_id',ex.id).range(a,b)),
     q(sb.from('marks_submissions').select('*').eq('exam_id',ex.id)),
     q(sb.from('teacher_assignments').select('class_id,subject_id,staff_id').not('subject_id','is',null).eq('academic_year_id',S.year.id)),
-    q(sb.from('staff').select('id,full_name'))]);
+    q(sb.from(staffTbl()).select('id,full_name'))]);
   const sNm=Object.fromEntries(stf.map(x=>[x.id,x.full_name])),clsOf=Object.fromEntries(en.map(e=>[e.id,e.class_id]));
   const cnt={};mk.forEach(m=>{const k=clsOf[m.enrollment_id]+'|'+m.subject_id;cnt[k]=(cnt[k]||0)+1});
   const size={};en.forEach(e=>{size[e.class_id]=(size[e.class_id]||0)+1});
@@ -1417,7 +1429,7 @@ async function acResults(box,B){
   $('#acX').onclick=()=>{const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows.map(r=>{const o={Roll:r.e.roll_no,Adm:r.e.students.admission_no,Name:r.e.students.full_name};subs.forEach(sj=>{const m=by[r.e.id+'|'+sj.id];o[sj.name]=m?(m.absent?'AB':m.marks):''});o.Total=r.t;o.Max=r.mx;o.Percent=r.pct;return o})),'Results');XLSX.writeFile(wb,'AlKhair_'+ex.short_name+'_'+(S.classes.find(c=>c.id===acSel.cls)||{}).name+'.xlsx')};
 }
 async function acSetup(box,B){
-  const [asg,stf]=await Promise.all([q(sb.from('teacher_assignments').select('*').eq('academic_year_id',S.year.id)),q(sb.from('staff').select('id,full_name,user_id,status').eq('status','active').order('full_name'))]);
+  const [asg,stf]=await Promise.all([q(sb.from('teacher_assignments').select('*').eq('academic_year_id',S.year.id)),q(sb.from(staffTbl()).select('id,full_name,user_id,status').eq('status','active').order('full_name'))]);
   const sNm=Object.fromEntries(stf.map(x=>[x.id,x])),cNm=id=>(classById(id)||{}).name||'',jNm=id=>(B.subjects.find(x=>x.id===id)||{}).name||'';
   box.innerHTML='<div class="card"><div class="card-head"><h2>Subjects per class</h2></div><p class="muted small" style="margin-bottom:8px">Starter subjects have been added. Please check and correct them.</p><div class="tablewrap"><table><thead><tr><th>Class</th>'+B.subjects.map(x=>'<th class="r">'+esc(x.name)+'</th>').join('')+'</tr></thead><tbody>'+
    S.classes.map(c=>'<tr><td class="nowrap">'+esc(c.name)+'</td>'+B.subjects.map(x=>'<td class="r"><input type="checkbox" data-c="'+c.id+'" data-s="'+x.id+'"'+(B.cs.some(y=>y.class_id===c.id&&y.subject_id===x.id)?' checked':'')+'></td>').join('')+'</tr>').join('')+'</tbody></table></div><div class="toolbar" style="margin-top:10px"><button class="btn ghost" id="acAdd">Add subject</button></div></div>'+
@@ -1435,18 +1447,20 @@ async function acSetup(box,B){
 async function vStaff(el){
   const B=await staffBase();
   const active=B.staff.filter(s=>s.status==='active');
-  el.innerHTML=head('Staff',active.length+' active staff'+(B.cfg.geo_lat==null?' · school location not set':''),'')+
+  el.innerHTML=head(S.profile.role==='coordinator'?'Teachers':'Staff',active.length+' active staff'+(B.cfg.geo_lat==null?' · school location not set':''),'')+
    (B.cfg.geo_lat==null?'<p class="banner" style="margin-bottom:12px">Set the school location in the Settings tab first. Teachers can punch only after that.</p>':'')+
-   '<div class="seg" role="group" aria-label="Staff view" style="justify-self:start;max-width:100%;overflow-x:auto">'+[['today','Today'],['month','Monthly'],['work','Teacher work'],['pay','Salary'],['dir','Staff list'],['set','Settings']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(staffTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="sbody" style="margin-top:14px;min-width:0;max-width:100%"></div>';
+   '<div class="seg" role="group" aria-label="Staff view" style="justify-self:start;max-width:100%;overflow-x:auto">'+[['today','Today'],['month','Monthly'],['work','Teacher work'],['report','Attendance report'],['pay','Salary'],['dir','Staff list'],['set','Settings']].filter(t=>S.profile.role==='owner'||!['pay','set'].includes(t[0])).map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(staffTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="sbody" style="margin-top:14px;min-width:0;max-width:100%"></div>';
   $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{staffTab=b.dataset.t;vStaff(el)});
   const box=$('#sbody');
   try{
     if(staffTab==='today')await stToday(box,B,active);
     else if(staffTab==='month')await stMonth(box,B,active);
     else if(staffTab==='work')await stWork(box,B,active);
-    else if(staffTab==='pay')await stPay(box,B);
+    else if(staffTab==='report')await stReport(box,B,active);
+    else if(staffTab==='pay'&&S.profile.role==='owner')await stPay(box,B);
     else if(staffTab==='dir')stDir(box,B);
-    else stSettings(box,B);
+    else if(S.profile.role==='owner')stSettings(box,B);
+    else await stToday(box,B,active);
   }catch(e){box.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}
 }
 
@@ -1455,6 +1469,7 @@ async function stPay(box,B){
   const d0=payMonth+'-01';
   let lines=await q(sb.from('payroll_lines').select('*').eq('month',d0));
   if(!lines.length&&payMonth===addMonth(today().slice(0,7),-1)&&B.staff.some(x=>x.status==='active'&&x.monthly_salary)){try{await rpc('payroll_generate',{p_month:d0});lines=await q(sb.from('payroll_lines').select('*').eq('month',d0))}catch(e){}}
+  const subm=(await q(sb.from('staff_attendance_months').select('*').eq('month',d0)))[0];
   const nm=Object.fromEntries(B.staff.map(s=>[s.id,s]));
   const drafts=lines.filter(l=>l.status==='draft'),paid=lines.filter(l=>l.status==='paid');
   const tot=a=>a.reduce((x,l)=>x+num(l.net_pay),0);
@@ -1502,6 +1517,8 @@ async function stPay(box,B){
   $$('[data-pay]').forEach(b=>b.onclick=()=>{const l=lines.find(x=>x.id===b.dataset.pay);
     formModal('Mark paid: '+((nm[l.staff_id]||{}).full_name||''),'<p class="muted small">Net pay '+inr(l.net_pay)+'</p>'+inp('paid_on','Paid on',today(),'date','required')+sel('pay_mode','Mode',[['online','Online'],['cash','Cash']],l.pay_mode||'online'),'Save',async fd=>{
       await rpc('payroll_mark_paid',{p_line:l.id,p_paid_on:fd.get('paid_on'),p_mode:fd.get('pay_mode')});closeModal();toast('Marked paid');vStaff($('#view'))},{})});
+  box.insertAdjacentHTML('afterbegin',subm?'<p class="banner" style="margin-bottom:10px">Attendance report for '+monthLabel(payMonth)+' was submitted by '+esc(subm.submitted_by_name||'the coordinator')+' on '+fmtDate(String(subm.submitted_at).slice(0,10))+'. Salary below is calculated from it.</p>':'<p class="banner" style="margin-bottom:10px"><b>The coordinator has not submitted the attendance report for '+monthLabel(payMonth)+' yet.</b> Salary cannot be calculated until it is submitted. <button class="btn ghost sm" id="osub" style="margin-left:8px">Review and submit it myself</button></p>');
+  if($('#osub'))$('#osub').onclick=()=>{staffTab='report';repMonth=payMonth;vStaff($('#view'))};
 }
 
 async function stToday(box,B,active){
@@ -1531,11 +1548,11 @@ function markModal(B,s,ds,a,done){
   if(a){const b=document.createElement('button');b.type='button';b.className='btn danger sm';b.textContent='Clear this day';b.onclick=async()=>{try{await q(sb.from('staff_attendance').delete().eq('id',a.id));closeModal();toast('Cleared');done()}catch(e){toast(errMsg(e),true)}};$('#mf .actions').prepend(b)}
 }
 
-async function stMonth(box,B,active){
-  const [y,m]=staffMonth.split('-').map(Number),dim=new Date(y,m,0).getDate(),first=staffMonth+'-01',last=staffMonth+'-'+String(dim).padStart(2,'0'),td=today();
+async function stCalcMonth(B,active,month){
+  const [y,m]=month.split('-').map(Number),dim=new Date(y,m,0).getDate(),first=month+'-01',last=month+'-'+String(dim).padStart(2,'0'),td=today();
   const att=await all((a,b)=>sb.from('staff_attendance').select('*').gte('work_date',first).lte('work_date',last).range(a,b));
   const by={};att.forEach(a=>{(by[a.staff_id]=by[a.staff_id]||{})[a.work_date]=a});
-  const days=[...Array(dim)].map((_,i)=>{const ds=staffMonth+'-'+String(i+1).padStart(2,'0');return{ds,n:i+1,dow:new Date(ds+'T00:00:00').getDay(),off:isOff(B.cfg,B.holSet,ds)}});
+  const days=[...Array(dim)].map((_,i)=>{const ds=month+'-'+String(i+1).padStart(2,'0');return{ds,n:i+1,dow:new Date(ds+'T00:00:00').getDay(),off:isOff(B.cfg,B.holSet,ds)}});
   const calc=s=>{const r={work:0,P:0,L:0,H:0,PL:0,UL:0,A:0,cells:[]};
     days.forEach(d=>{
       if(d.ds>td||(s.joined_on&&d.ds<s.joined_on)){r.cells.push('');return}
@@ -1546,6 +1563,49 @@ async function stMonth(box,B,active){
       if(c==='P')r.P++;else if(c==='L')r.L++;else if(c==='H')r.H++;else if(c==='PL')r.PL++;else if(c==='UL')r.UL++;else r.A++;});
     r.attended=r.P+r.L+r.H*0.5;return r};
   const rows=active.map(s=>({s,r:calc(s)}));
+  return{days,rows};
+}
+
+/* ---------- Monthly attendance report: the coordinator submits it, the owner calculates salary from it ---------- */
+let repMonth=addMonth(today().slice(0,7),-1);
+async function stReport(box,B,active){
+  const d0=repMonth+'-01',[y,m]=repMonth.split('-').map(Number),over=new Date(y,m,1)<=new Date(today()+'T00:00:00');
+  const [{days,rows},sub]=await Promise.all([stCalcMonth(B,active,repMonth),q(sb.from('staff_attendance_months').select('*').eq('month',d0))]);
+  const done=sub[0],isOwner=S.profile.role==='owner';
+  const flags=rows.filter(({r})=>r.A>0);
+  box.innerHTML='<div class="toolbar" style="margin-bottom:10px;gap:8px"><button class="btn ghost sm" id="rp">‹</button><b style="min-width:80px;text-align:center">'+monthLabel(repMonth)+'</b><button class="btn ghost sm" id="rn">›</button><button class="btn ghost" id="rx">Download</button></div>'+
+   (done?'<p class="banner" style="margin-bottom:12px"><b>Submitted to the owner</b> by '+esc(done.submitted_by_name||'')+' on '+fmtDate(String(done.submitted_at).slice(0,10))+(done.note?'. Note: '+esc(done.note):'')+'. The month is locked.'+(isOwner?' <button class="btn ghost sm" id="rre" style="margin-left:8px">Reopen month</button>':' To change anything, ask the owner to reopen it.')+'</p>':
+    (over?'<div class="card" style="margin-bottom:12px"><b>Check this report, then send it to the owner.</b><p class="muted small" style="margin:4px 0 8px">'+(flags.length?flags.length+' staff have days with no attendance marked (shown as Absent). Fix them in the Monthly tab or by marking leave before submitting.':'Every working day is marked.')+' After you submit, the month is locked and salary is calculated from this report.</p>'+inp('rnote','Note for the owner (optional)','','text')+'<div class="toolbar" style="margin-top:8px"><button class="btn" id="rsub">'+(isOwner?'Submit attendance':'Submit to owner')+'</button></div></div>':'<p class="banner" style="margin-bottom:12px">'+monthLabel(repMonth)+' is not over yet. You can submit this report after the last day of the month.</p>'))+
+   '<div class="card"><div class="tablewrap"><table><thead><tr><th>Name</th><th>Designation</th><th class="r">Working days</th><th class="r">Present</th><th class="r">Late</th><th class="r">Half</th><th class="r">Paid leave</th><th class="r">Unpaid</th><th class="r">Absent</th></tr></thead><tbody>'+
+   (rows.length?rows.map(({s,r})=>'<tr><td class="nowrap">'+esc(s.full_name)+'</td><td>'+esc(s.designation||'')+'</td><td class="r">'+r.work+'</td><td class="r"><b>'+r.attended+'</b></td><td class="r">'+r.L+'</td><td class="r">'+r.H+'</td><td class="r">'+r.PL+'</td><td class="r">'+r.UL+'</td><td class="r">'+(r.A?'<b style="color:var(--bad)">'+r.A+'</b>':'0')+'</td></tr>').join(''):'<tr><td colspan="9" class="muted">No staff yet.</td></tr>')+'</tbody></table></div></div>';
+  const again=()=>vStaff($('#view'));
+  $('#rp').onclick=()=>{repMonth=addMonth(repMonth,-1);again()};$('#rn').onclick=()=>{repMonth=addMonth(repMonth,1);again()};
+  $('#rx').onclick=()=>{if(typeof XLSX==='undefined'){toast('The spreadsheet writer could not load. Reload and try again.',true);return}
+    const data=rows.map(({s,r})=>({Name:s.full_name,Designation:s.designation||'','Working days':r.work,Present:r.attended,Late:r.L,'Half day':r.H,'Paid leave':r.PL,'Unpaid leave':r.UL,Absent:r.A}));
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(data),repMonth);XLSX.writeFile(wb,'AlKhair_attendance_report_'+repMonth+'.xlsx')};
+  if($('#rsub'))$('#rsub').onclick=async()=>{if(!confirm('Submit the '+monthLabel(repMonth)+' attendance report'+(isOwner?'?':' to the owner?')+' The month will be locked.'))return;try{await rpc('attendance_submit_month',{p_month:d0,p_note:($('#rnote').value||'').trim()||null});toast('Attendance report submitted');again()}catch(e){toast(errMsg(e),true)}};
+  if($('#rre'))$('#rre').onclick=async()=>{if(!confirm('Reopen '+monthLabel(repMonth)+'? The coordinator can edit attendance again and must submit it once more.'))return;try{await rpc('attendance_reopen_month',{p_month:d0});toast('Month reopened');again()}catch(e){toast(errMsg(e),true)}};
+}
+
+/* ---------- Coordinator home ---------- */
+async function vCoordHome(el){
+  const B=await staffBase(),active=B.staff.filter(s=>s.status==='active'),ds=today();
+  const pm=addMonth(ds.slice(0,7),-1)+'-01';
+  const [att,sub,asg]=await Promise.all([
+    q(sb.from('staff_attendance').select('staff_id,status').eq('work_date',ds)),
+    q(sb.from('staff_attendance_months').select('month').eq('month',pm)),
+    q(sb.from('teacher_assignments').select('*').eq('academic_year_id',S.year.id))]);
+  const inn=att.filter(a=>['present','late','half_day'].includes(a.status)).length;
+  const off=isOff(B.cfg,B.holSet,ds);
+  const cls=new Set(asg.filter(a=>a.is_class_teacher).map(a=>a.class_id)).size;
+  el.innerHTML=head('Coordinator','Session '+S.year.name+' · '+fmtDate(ds))+
+   '<div class="kpis">'+kpi('Staff in school',off?'Off':String(inn),off?off:'of '+active.length+' staff')+kpi('Classes',String(S.classes.length),cls+' have a class teacher')+kpi(monthLabel(pm.slice(0,7))+' report',sub.length?'Submitted':'Pending',sub.length?'locked, owner can see it':'send to the owner')+'</div>'+
+   (sub.length?'':'<div class="card" style="margin-top:14px"><b>Monthly attendance report</b><p class="muted small" style="margin:4px 0 8px">'+monthLabel(pm.slice(0,7))+' has not been sent to the owner yet. Salary can be calculated only after you submit it.</p><a class="btn" href="#/staff" id="goRep">Open attendance report</a></div>')+
+   '<div class="card" style="margin-top:14px"><b>Your work</b><p class="muted small" style="margin-top:4px">Classes: subjects, teachers, attendance, exams, marks and report cards. Teachers: daily attendance, teacher work and the monthly report. Student details and fees are managed by Accounts and Administration.</p></div>';
+  const g=$('#goRep');if(g)g.onclick=()=>{staffTab='report';repMonth=pm.slice(0,7)};
+}
+async function stMonth(box,B,active){
+  const {days,rows}=await stCalcMonth(B,active,staffMonth);
   const col={P:'var(--good)',L:'var(--warn)',H:'var(--warn)',PL:'var(--muted)',UL:'var(--muted)',A:'var(--bad)'};
   box.innerHTML='<div class="toolbar" style="margin-bottom:10px"><input class="input" type="month" id="smon" value="'+staffMonth+'" aria-label="Month"><button class="btn ghost" id="sx">Download</button></div>'+
    '<div class="card" style="min-width:0"><div class="tablewrap"><table><thead><tr><th>Name</th><th class="r">Working days</th><th class="r">Present</th><th class="r">Late</th><th class="r">Half</th><th class="r">Paid leave</th><th class="r">Unpaid</th><th class="r">Absent</th>'+days.map(d=>'<th class="r" style="padding:6px 4px;font-size:11px"'+(d.off?' title="'+esc(d.off)+'"':'')+'>'+d.n+'</th>').join('')+'</tr></thead><tbody>'+
@@ -1587,6 +1647,8 @@ function staffPayload(fd){
   return o;
 }
 function stDir(box,B){
+  const own=S.profile.role==='owner';
+  if(!own){box.innerHTML='<div class="card">'+(B.staff.length?'<div class="tablewrap"><table><thead><tr><th>Name</th><th>Designation</th><th>Subjects / classes</th><th>Mobile</th><th>Joined</th><th>Status</th></tr></thead><tbody>'+B.staff.map(s=>'<tr><td>'+esc(s.full_name)+'</td><td>'+esc(s.designation||'')+'</td><td>'+esc([s.subjects,s.classes_taught].filter(Boolean).join(' · '))+'</td><td class="nowrap">'+esc(s.phone||'')+'</td><td class="nowrap">'+fmtDate(s.joined_on)+'</td><td><span class="pill '+(s.status==='active'?'good':'neutral')+'">'+(s.status==='active'?'Working':'Left')+'</span></td></tr>').join('')+'</tbody></table></div>':'<p class="muted">No staff yet.</p>')+'<p class="muted small" style="margin-top:8px">Staff details and salary are managed by the owner.</p></div>';return}
   box.innerHTML='<div class="toolbar" style="margin-bottom:10px"><button class="btn" id="sadd">Add staff</button><button class="btn ghost" id="simp">Import from Excel</button><input type="file" id="sfile" accept=".xlsx,.xls,.csv" hidden></div>'+
    '<div class="card">'+(B.staff.length?'<div class="tablewrap"><table><thead><tr><th>Name</th><th>Designation</th><th>Subjects / classes</th><th>Mobile</th><th>Joined</th><th class="r">Salary</th><th>Login</th><th>Status</th></tr></thead><tbody>'+
    B.staff.map(s=>'<tr class="click" data-s="'+esc(s.id)+'"><td><a href="#" data-s="'+esc(s.id)+'">'+esc(s.full_name)+'</a></td><td>'+esc(s.designation||'')+'</td><td>'+esc([s.subjects,s.classes_taught].filter(Boolean).join(' · '))+'</td><td class="nowrap">'+esc(s.phone||'')+'</td><td class="nowrap">'+fmtDate(s.joined_on)+'</td><td class="r">'+(s.monthly_salary!=null?inr(s.monthly_salary):'<span class="muted">-</span>')+'</td><td>'+(s.user_id?'<span class="pill good">Created</span>':'<span class="pill neutral">None</span>')+'</td><td><span class="pill '+(s.status==='active'?'good':'neutral')+'">'+(s.status==='active'?'Working':'Left')+'</span></td></tr>').join('')+'</tbody></table></div>':'<p class="muted">No staff yet. Use Add staff, or import an Excel with Name, Designation, Mobile, Joining date and Salary.</p>')+'</div>';
@@ -1597,19 +1659,21 @@ function stDir(box,B){
   $('#sfile').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{await staffImport(f);toast('Staff imported');again()}catch(err){toast(errMsg(err),true)}};
 }
 function staffModal(s,again){
-  const sheet=formModal(s.full_name,staffFields(s)+'<div class="card" style="background:var(--surface2)"><b>Teacher login</b><p class="muted small" style="margin:4px 0 8px">'+(s.user_id?'Login created. Teacher signs in with '+esc(s.login_id&&s.login_id.endsWith('@staff.alkhair.in')?'staff code '+String(s.login_id).split('@')[0].toUpperCase():(s.login_id||''))+'.':'Teacher signs in with the staff code ('+esc(s.staff_code||'set a staff code above first')+') and a temporary password that you hand over. They must set their own password at first sign in. Codes belong to the person and are never reused.')+'</p><div id="lgout"></div><div class="toolbar">'+(s.user_id?'<button type="button" class="btn ghost sm" id="lgreset">Reset password</button><button type="button" class="btn ghost sm" id="lgoff">'+'Block / unblock login</button>':'<button type="button" class="btn sm" id="lgmake">Create login</button>')+'</div></div>','Save',async fd=>{
+  const sheet=formModal(s.full_name,staffFields(s)+'<div class="card" style="background:var(--surface2)"><b>Login</b><p class="muted small" style="margin:4px 0 8px">'+(s.user_id?'Login created. Signs in with '+esc(s.login_id&&s.login_id.endsWith('@staff.alkhair.in')?'staff code '+String(s.login_id).split('@')[0].toUpperCase():(s.login_id||''))+'.':'Signs in with the staff code ('+esc(s.staff_code||'set a staff code above first')+') and a temporary password that you hand over. They must set their own password at first sign in. Codes belong to the person and are never reused.')+'</p>'+sel('lgrole','Access',[['teacher','Teacher (own classes only)'],['coordinator','Coordinator (classes and teachers)'],['accountant','Accounts and Administration (students, fees, accounts)']],'teacher')+'<div id="lgout"></div><div class="toolbar">'+(s.user_id?'<button type="button" class="btn ghost sm" id="lgrolebtn">Change access</button>':'')+(s.user_id?'<button type="button" class="btn ghost sm" id="lgreset">Reset password</button><button type="button" class="btn ghost sm" id="lgoff">'+'Block / unblock login</button>':'<button type="button" class="btn sm" id="lgmake">Create login</button>')+'</div></div>','Save',async fd=>{
     const pl=staffPayload(fd);if(pl.staff_code)pl.staff_code=pl.staff_code.toUpperCase();await q(sb.from('staff').update(pl).eq('id',s.id));
     if(s.user_id&&pl.status!==s.status){try{await sb.functions.invoke('staff-login',{body:{action:pl.status==='left'?'disable':'enable',staff_id:s.id}});toast(pl.status==='left'?'Saved. Login blocked because the staff member left.':'Saved. Login enabled.')}catch(e){toast('Saved, but the login could not be updated: '+errMsg(e),true)}}else toast('Saved');
     closeModal();again()},{wide:true});
   const call=async action=>{
     const out=$('#lgout');out.innerHTML='<p class="muted small">Working…</p>';
     try{
-      const {data,error}=await sb.functions.invoke('staff-login',{body:{action,staff_id:s.id}});
+      const {data,error}=await sb.functions.invoke('staff-login',{body:{action,staff_id:s.id,role:$('#lgrole').value}});
       if(error){let m=error.message;try{const j=await error.context.json();if(j&&j.error)m=j.error}catch(_){ }throw new Error(m)}
       if(data&&data.error)throw new Error(data.error);
       out.innerHTML='<div class="banner" style="margin:6px 0 10px"><b>Give this to '+esc(s.full_name)+' now. It will not be shown again.</b><br>Login: <b>'+esc(data.login_hint||data.login_id)+'</b><br>Temporary password: <b style="font-size:18px;letter-spacing:1px">'+esc(data.temp_password)+'</b></div>';
       again();
     }catch(e){out.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}};
+  if(s.user_id)q(sb.from('profiles').select('role').eq('id',s.user_id).single()).then(p=>{if(p&&['teacher','coordinator','accountant'].includes(p.role))$('#lgrole').value=p.role}).catch(()=>{});
+  if($('#lgrolebtn'))$('#lgrolebtn').onclick=async()=>{try{const {data,error}=await sb.functions.invoke('staff-login',{body:{action:'role',staff_id:s.id,role:$('#lgrole').value}});if(error||(data&&data.error))throw new Error((data&&data.error)||error.message);$('#lgout').innerHTML='<p class="small"><b>Access changed. It applies the next time they sign in.</b></p>'}catch(e){$('#lgout').innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}};
   if($('#lgmake'))$('#lgmake').onclick=()=>call('create');
   if($('#lgreset'))$('#lgreset').onclick=()=>call('reset');
   if($('#lgoff'))$('#lgoff').onclick=async()=>{try{const p=await q(sb.from('profiles').select('is_active').eq('id',s.user_id).single());const {data,error}=await sb.functions.invoke('staff-login',{body:{action:p.is_active?'disable':'enable',staff_id:s.id}});if(error||(data&&data.error))throw new Error((data&&data.error)||error.message);$('#lgout').innerHTML='<p class="small"><b>Login is now '+(p.is_active?'blocked':'active')+'.</b></p>'}catch(e){$('#lgout').innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}};
@@ -1705,11 +1769,11 @@ async function startApp(session){
   try{
     S.user=session.user;
     const prof=await q(sb.from('profiles').select('*').eq('id',S.user.id).maybeSingle());
-    if(!prof||!prof.is_active||!['owner','teacher'].includes(prof.role)){
+    if(!prof||!prof.is_active||!['owner','accountant','coordinator','teacher'].includes(prof.role)){
       $('#boot').hidden=true;$('#app').hidden=true;$('#gate').hidden=false;
       $('#lerr').textContent='This account does not have access yet. Ask the owner to add you.';await sb.auth.signOut();S.user=null;return}
-    S.profile=prof;if(prof.role==='owner')await loadRef();
-    $('#who').textContent=prof.full_name;$('#boot').hidden=true;$('#gate').hidden=true;$('#app').hidden=false;
+    S.profile=prof;if(prof.role!=='teacher')await loadRef();
+    $('#who').textContent=prof.full_name+' · '+(ROLE_LABEL[prof.role]||'');$('#boot').hidden=true;$('#gate').hidden=true;$('#app').hidden=false;
     await route();
   }catch(e){console.error(e);$('#boot').hidden=true;$('#gate').hidden=false;$('#lerr').textContent='Could not load: '+errMsg(e)}
 }

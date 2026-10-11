@@ -31,12 +31,20 @@ Deno.serve(async (req) => {
     const { data: isOwner } = await caller.rpc("is_owner");
     if (isOwner !== true) return json({ error: "Only the owner can do this" }, 403);
 
-    const { action, staff_id } = await req.json();
-    if (!staff_id || !/^(create|reset|disable|enable)$/.test(action)) return json({ error: "Bad request" }, 400);
+    const { action, staff_id, role } = await req.json();
+    const newRole = ["teacher", "coordinator", "accountant"].includes(role) ? role : "teacher";
+    if (!staff_id || !/^(create|reset|disable|enable|role)$/.test(action)) return json({ error: "Bad request" }, 400);
 
     const admin = createClient(url, svc, { auth: { persistSession: false } });
     const { data: st, error: se } = await admin.from("staff").select("*").eq("id", staff_id).maybeSingle();
     if (se || !st) return json({ error: "Staff member not found" }, 404);
+
+    if (action === "role") {
+      if (!st.user_id) return json({ error: "This staff member has no login yet" }, 400);
+      const { error: re } = await admin.from("profiles").update({ role: newRole }).eq("id", st.user_id);
+      if (re) return json({ error: re.message }, 400);
+      return json({ ok: true, role: newRole });
+    }
 
     // Login on/off. A disabled login cannot sign in, but all records the person created are kept.
     if (action === "disable" || action === "enable") {
@@ -60,7 +68,7 @@ Deno.serve(async (req) => {
         user_metadata: { temp_password: true, full_name: st.full_name },
       });
       if (ce || !cu?.user) return json({ error: ce?.message || "Could not create login" }, 400);
-      const { error: pe } = await admin.from("profiles").upsert({ id: cu.user.id, full_name: st.full_name, role: "teacher", is_active: true });
+      const { error: pe } = await admin.from("profiles").upsert({ id: cu.user.id, full_name: st.full_name, role: newRole, is_active: true });
       if (pe) { await admin.auth.admin.deleteUser(cu.user.id); return json({ error: pe.message }, 400); }
       await admin.from("staff").update({ user_id: cu.user.id, login_id: loginId }).eq("id", st.id);
       return json({ ok: true, login_id: loginId, login_hint: code, temp_password: pwd });

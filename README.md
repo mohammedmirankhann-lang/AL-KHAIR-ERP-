@@ -48,3 +48,18 @@ Report cards, grades, AI summaries, WhatsApp sending through the official API.
 - Everything is calculated from the books. The numbers are only as complete as the entries in Accounts: record all expenses (electricity, stationery, repairs...) or put a monthly estimate in Assumptions.
 - Assets: add with Already owned (opening) for existing items, enter present value and remaining life. Post depreciation monthly (one entry per finished month).
 - Database: migration 16 (fixed_assets, asset_dep_runs, finance_settings, fin_ledger, fin_cashflow, asset_add, asset_depreciation_run).
+
+## Three workspaces, one link, three logins
+One system and one database. The sign-in decides what each person sees.
+
+| Login | Sees | Cannot see |
+|---|---|---|
+| **Owner** | Everything: dashboard, students, fees, accounts, Finance, academics, staff, **salary** | – |
+| **Accounts and Administration** (`accountant`) | Dashboard, Students (master data lives here), Documents, Fees, Reminders, Accounts (receipts, expenses, cash, P&L, balance sheet), Import | Staff, salary, Finance tab, academics |
+| **Coordinator** (`coordinator`) | Home, Classes (subjects, attendance, exams, marks, report cards), Teachers (daily attendance, teacher work, staff directory without salary), monthly **Attendance report** | Fees, accounts, student documents, salary and bank details |
+
+* Student master data is edited only by Accounts and Administration (or the owner); every workspace reads the same record.
+* Monthly staff attendance: the coordinator checks the month in **Teachers > Attendance report** and presses *Submit to owner*. The month is then locked (owner can *Reopen* it).
+* Salary is owner-only. `payroll_generate` refuses to run until that month's attendance report is submitted.
+* Logins are created by the owner in Staff > staff member > Login > Access (Teacher / Coordinator / Accounts and Administration). Access can be changed later with *Change access*.
+* Migration `20261010000017_roles_workspaces.sql`; edge function `staff-login` accepts `role`.
