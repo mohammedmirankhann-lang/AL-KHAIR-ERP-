@@ -374,7 +374,7 @@ const classByName=n=>S.classes.find(c=>c.name===n);
 const summaryRows=()=>all((a,b)=>sb.from('v_student_fee_summary').select('*').eq('academic_year_id',S.year.id).order('sort_order').order('full_name').range(a,b));
 
 /* ---------- routing ---------- */
-const NAV=[['dashboard','Dashboard'],['students','Students'],['documents','Documents'],['staff','Staff'],['academics','Academics'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['trends','Trends'],['import','Import']];
+const NAV=[['dashboard','Dashboard'],['students','Students'],['documents','Documents'],['staff','Staff'],['academics','Academics'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['finance','Finance'],['trends','Trends'],['import','Import']];
 function currentRoute(){const h=location.hash.replace(/^#\/?/,'').split('/');return{name:h[0]||'dashboard',arg:h[1]?decodeURIComponent(h[1]):null}}
 async function route(){
   if(!S.user)return;
@@ -382,7 +382,7 @@ async function route(){
   if(S.user.user_metadata&&S.user.user_metadata.temp_password){$('#nav').innerHTML='';await vSetPassword(view);return}
   if(S.profile&&S.profile.role==='teacher'){const tn=[['me','My attendance'],['attendance','Class attendance'],['marks','Marks'],['traits','Report details']],tr=(r.name==='dashboard'?'me':r.name);$('#nav').innerHTML=tn.map(n=>'<a href="#/'+n[0]+'"'+(tr===n[0]?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');view.innerHTML='<p class="muted">Loading…</p>';const tf={attendance:vTAttendance,marks:vTMarks,traits:vTTraits}[tr]||vMyAttendance;try{await tf(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
   $('#nav').innerHTML=NAV.map(n=>'<a href="#/'+n[0]+'"'+((r.name===n[0]||(r.name==='student'&&n[0]==='students'))?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');
-  const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,olddues:vOldDues,fees:vFees,accounts:vAccounts,trends:vTrends,import:vImport}[r.name]||vDashboard;
+  const fn={dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,olddues:vOldDues,fees:vFees,accounts:vAccounts,finance:vFinance,trends:vTrends,import:vImport}[r.name]||vDashboard;
   view.innerHTML='<p class="muted">Loading…</p>';
   try{await fn(view,r.arg);}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted" style="margin-top:6px">'+esc(errMsg(e))+'</p><p style="margin-top:10px"><button class="btn" onclick="route()">Try again</button></p></div>'}
   window.scrollTo(0,0);
@@ -789,6 +789,174 @@ async function vTrends(el){
    '<div class="grid2e"><div class="card"><h2 style="margin-bottom:12px">Collection by financial year</h2>'+(fyRows.length?bars(fyRows,inrShort,true):'<p class="muted">No history.</p>')+'</div>'+
    '<div class="card"><div class="card-head"><h2>Income and expenses</h2><div class="legend"><span><i></i>Income</span><span><i class="two"></i>Expense</span></div></div>'+(iem.length>1?lineChart(incS,[],'Monthly income and expenses',expS):'<p class="muted">Appears once the books have entries over several months.</p>')+'</div></div>';
   $('#th').onchange=e=>{trendH=+e.target.value;vTrends(el)};
+}
+
+/* =================================================================
+   FINANCE: health, cash flow, assets, forecast, FCFF and DCF (built from the books)
+================================================================= */
+const FIN_DEF={tax:0,wacc:14,tg:4,years:5,feeHike:5,enrol:3,salInc:6,othInc:6,unrec:0,capexPct:3,nwcPct:8,aprilShare:40,collEff:92,life:8};
+const FIN_LABELS=[['feeHike','Fee increase per year (%)'],['enrol','Student growth per year (%)'],['salInc','Salary increase per year (%)'],['othInc','Rent and other cost increase per year (%)'],['unrec','Expenses not yet recorded in the books (₹ per month)'],['collEff','Share of billed fees finally collected (%)'],['aprilShare','Share of a new year\'s fees collected in April (%)'],['capexPct','Yearly spending on assets (% of fees)'],['life','Average life of new assets (years)'],['nwcPct','Fees receivable at year end (% of fees)'],['tax','Tax rate (%)'],['wacc','Discount rate, WACC (%)'],['tg','Long-term growth after the forecast (%)'],['years','Forecast years for valuation']];
+let finTab='health';
+const fkey=m=>String(m).slice(0,7);
+function finMonthDep(a,m){
+  if(a.status!=='active'||!a.life_years)return 0;
+  const n=Math.round(num(a.life_years)*12),pm=fkey(a.purchase_date),idx=(+m.slice(0,4)*12+ +m.slice(5,7))-(+pm.slice(0,4)*12+ +pm.slice(5,7));
+  return idx>=0&&idx<n?Math.round((num(a.cost)-num(a.salvage_value))/n*100)/100:0;
+}
+const finBucket=c=>c==null?'xfer':c==='1100'?'fees':c==='3000'?'open':c==='5010'||c==='5015'?'sal':c==='5020'?'rent':c[0]==='5'?'oth':c[0]==='4'?'othinc':(c==='1500'||c==='1510')?'capex':c[0]==='2'?'liab':'other';
+function finCalc(led,cf,assets,set,nowStr,students){
+  const A=Object.assign({},FIN_DEF,set||{}),cur=nowStr.slice(0,7),fy0=S.year.starts_on.slice(0,7);
+  const fyM=[];for(let i=0;i<12;i++)fyM.push(addMonth(fy0,i));
+  const done=fyM.filter(m=>m<cur),rem=fyM.filter(m=>m>=cur),last3=done.slice(-3);
+  const rows={};led.forEach(r=>{const x=rows[r.code]=rows[r.code]||{type:r.type,name:r.name,m:{}};x.m[fkey(r.month)]={dr:num(r.debit),cr:num(r.credit)}});
+  const net=(code,months)=>{const x=rows[code];if(!x)return 0;let dr=0,cr=0;(months||Object.keys(x.m)).forEach(m=>{const y=x.m[m];if(y){dr+=y.dr;cr+=y.cr}});return(x.type==='asset'||x.type==='expense')?dr-cr:cr-dr};
+  const bal=(code,upTo)=>net(code,rows[code]?Object.keys(rows[code].m).filter(m=>!upTo||m<=upTo):[]);
+  const codes=t=>Object.keys(rows).filter(k=>rows[k].type===t);
+  const R0=sum(codes('income').map(k=>net(k,fyM)));
+  const grp=k=>k==='5010'||k==='5015'?'P':k==='5020'?'R':k==='5120'?'D':'O';
+  const ytd={P:0,R:0,D:0,O:0},rr={P:0,R:0,D:0,O:0};
+  codes('expense').forEach(k=>{ytd[grp(k)]+=net(k,fyM);rr[grp(k)]+=last3.length?net(k,last3)/last3.length:0});
+  const P0=ytd.P+rem.length*rr.P,Rent0=ytd.R+rem.length*rr.R,Oth0=ytd.O+rem.length*rr.O,U=A.unrec*12;
+  const depFY=sum(fyM.map(m=>sum(assets.map(a=>finMonthDep(a,m)))));
+  const opex0=P0+Rent0+Oth0+U,EBITDA0=R0-opex0,EBIT0=EBITDA0-depFY;
+  const cash=bal('1010'),bank=bal('1020'),liquid=cash+bank,recv=bal('1100'),adv=bal('1200'),advIn=bal('2000'),salPay=bal('2100'),hold=bal('2110'),othPay=bal('2200'),loans=bal('2300');
+  const rrH=last3.length?net('2110',last3)/last3.length:0;
+  const liabCur=advIn+salPay+hold+othPay,nwcNow=recv+adv-liabCur;
+  const fixedNet=bal('1500')+bal('1510')+bal('1590');
+  // cash flow by month and bucket
+  const cfBy={};cf.forEach(r=>{const m=fkey(r.month),b=finBucket(r.code);(cfBy[m]=cfBy[m]||{})[b]=(cfBy[m][b]||0)+num(r.amount)});
+  const openCash=sum(Object.keys(cfBy).filter(m=>m<fy0).map(m=>sum(Object.values(cfBy[m]))));
+  const cfM=fyM.filter(m=>m<=cur);let run=openCash;
+  const cfRows=cfM.map(m=>{const b=cfBy[m]||{},n=sum(Object.values(b)),o=run;run+=n;return{m,b,net:n,open:o,close:run}});
+  const outAvg=last3.length?-sum(last3.map(m=>{const b=cfBy[m]||{};return(b.sal||0)+(b.rent||0)+(b.oth||0)+(b.capex||0)}))/last3.length:0;
+  const burn=Math.max(outAvg,rr.P-rrH+rr.R+rr.O+A.unrec);
+  const c={A,cur,fyM,done,rem,rows,net,bal,R0,P0,Rent0,Oth0,U,ytd,rr,rrH,depFY,opex0,EBITDA0,EBIT0,cash,bank,liquid,recv,adv,liabCur,hold,loans,nwcNow,fixedNet,cfRows,openCash,cfBy,burn,runway:burn>0?liquid/burn:null,students,codes};
+  c.fc=cc=>finForecast(c,cc==null?A.collEff:cc);
+  return c;
+}
+function finForecast(c,coll){
+  const A=c.A,fyEnd=c.fyM[11],next=addMonth(c.cur,1),left=[];for(let m=next;m<=fyEnd;m=addMonth(m,1))left.push(m);
+  const D1=c.R0*(1+A.feeHike/100)*(1+A.enrol/100),ce=coll/100,aps=A.aprilShare/100,up=(1+A.salInc/100)*(1+A.enrol/200),out=[];let b=c.liquid;
+  for(let i=0;i<12;i++){
+    const m=addMonth(next,i),isNew=m>fyEnd,mo=+m.slice(5,7);
+    const coll_=isNew?D1*ce*(mo===4?aps:(1-aps)/11):(left.length?Math.max(0,c.recv)*ce/left.length:0);
+    const gross=c.rr.P*(isNew?up:1),hb=c.rrH*(isNew?up:1),sal=gross-hb;
+    const rent=c.rr.R*(isNew?1+A.othInc/100:1),oth=(c.rr.O+A.unrec)*(isNew?1+A.othInc/100:1),capex=(isNew?D1:c.R0)*A.capexPct/100/12;
+    const release=m===addMonth(fyEnd,1)?c.hold+c.rrH*(left.length+1):0;
+    const outflow=sal+rent+oth+capex+release,netv=coll_-outflow;b+=netv;
+    out.push({m,coll:coll_,sal,rent,oth,capex,release,out:outflow,net:netv,close:b});
+  }
+  return out;
+}
+function finDCF(c,wacc,tg){
+  const A=c.A,N=Math.max(1,Math.min(10,Math.round(A.years))),w=wacc/100,g=tg/100;
+  let rev=c.R0,P=c.P0,Rn=c.Rent0,O=c.Oth0+c.U,dep=c.depFY,capNew=0,nwc=A.nwcPct/100*c.R0;const yrs=[];let pv=0;
+  const fy=+S.year.starts_on.slice(0,4);
+  for(let t=1;t<=N;t++){
+    rev*=(1+A.feeHike/100)*(1+A.enrol/100);P*=(1+A.salInc/100)*(1+A.enrol/200);Rn*=1+A.othInc/100;O*=1+A.othInc/100;
+    const capex=rev*A.capexPct/100;capNew+=capex;const d=dep+capNew/Math.max(1,A.life);
+    const ebitda=rev-P-Rn-O,ebit=ebitda-d,tax=Math.max(0,ebit)*A.tax/100,nopat=ebit-tax;
+    const nw=A.nwcPct/100*rev,dn=nw-nwc;nwc=nw;
+    const fcff=nopat+d-capex-dn,df=1/Math.pow(1+w,t);pv+=fcff*df;
+    yrs.push({t,l:(fy+t)+'-'+String(fy+t+1).slice(2),rev,ebitda,dep:d,ebit,tax,nopat,capex,dn,fcff,df});
+  }
+  const lastF=yrs[N-1].fcff,tv=w>g?lastF*(1+g)/(w-g):null,pvTv=tv==null?null:tv*yrs[N-1].df,ev=pvTv==null?null:pv+pvTv;
+  return{yrs,pv,tv,pvTv,ev,eq:ev==null?null:ev+c.liquid-c.loans,N};
+}
+const finPill=(t,k)=>'<span class="pill '+k+'">'+esc(t)+'</span>';
+async function finLoad(){
+  const [led,cf,assets,runs,st]=await Promise.all([rpc('fin_ledger'),rpc('fin_cashflow'),q(sb.from('fixed_assets').select('*').order('purchase_date')),q(sb.from('asset_dep_runs').select('*').order('month')),q(sb.from('finance_settings').select('*'))]);
+  const cnt=await sb.from('enrollments').select('id',{count:'exact',head:true}).eq('academic_year_id',S.year.id).eq('status','enrolled');
+  return{led,cf,assets,runs,set:(st[0]&&st[0].data)||{},students:cnt.count||0};
+}
+async function vFinance(el){
+  const tabs=[['health','Health'],['cash','Cash flow'],['assets','Assets'],['fc','Forecast'],['dcf','FCFF and DCF'],['set','Assumptions']];
+  el.innerHTML=head('Finance','Financial health, cash flow, forecast and valuation, built from your books')+'<div class="seg" role="group" style="justify-self:start;max-width:100%;overflow-x:auto">'+tabs.map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(finTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="fbody" style="margin-top:14px;min-width:0"><p class="muted">Loading…</p></div>';
+  $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{finTab=b.dataset.t;vFinance(el)});
+  const box=$('#fbody'),D=await finLoad(),c=finCalc(D.led,D.cf,D.assets,D.set,today(),D.students);
+  try{({health:finHealth,cash:finCash,assets:finAssets,fc:finFc,dcf:finDcf,set:finSettings})[finTab](box,c,D)}catch(e){console.error(e);box.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}
+}
+function finNotes(c,D){
+  const n=[],othCodes=c.codes('expense').filter(k=>!['5010','5015','5020','5120'].includes(k)&&c.net(k,c.fyM)!==0);
+  if(c.cash<0)n.push('Cash in hand is negative ('+inr(c.cash)+'). Opening cash has not been entered, or some cash receipts are not recorded. Check this in Accounts.');
+  if(!othCodes.length&&c.U===0)n.push('Only salaries and rent are recorded as expenses this session. Electricity, stationery, repairs and other costs are missing, so profit and valuation look higher than they really are. Record them in Accounts, or put a monthly estimate in Assumptions.');
+  if(!D.assets.length)n.push('No assets are entered yet. Add furniture, equipment and building in the Assets tab so depreciation and asset spending are included.');
+  const cfIn=c.cfRows.map(r=>(r.b.fees||0)+(r.b.othinc||0)),tot=sum(cfIn);
+  if(tot>0&&c.cfRows.length>2&&Math.max.apply(null,cfIn)/tot>0.7)n.push('Most fee receipts are dated in one month (the day they were entered), so monthly cash flow for earlier months looks incomplete. It will be accurate for new receipts.');
+  return n.length?'<div class="card" style="margin-top:12px"><h2 style="margin-bottom:6px">Please check</h2><ul class="list">'+n.map(t=>'<li><div>'+esc(t)+'</div></li>').join('')+'</ul></div>':'';
+}
+function finHealth(box,c,D){
+  const sm=c.R0>0?c.P0/c.R0*100:null,collPct=c.R0>0?Math.max(0,Math.min(100,(1-Math.max(0,c.recv)/c.R0)*100)):null,mar=c.R0>0?c.EBITDA0/c.R0*100:null;
+  const rw=c.runway,cr=c.liabCur>0?(c.liquid+c.recv)/c.liabCur:null,qr=c.liabCur>0?c.liquid/c.liabCur:null;
+  const st=(v,g,w)=>v==null?['n/a','neutral']:v>=g?['Good','good']:v>=w?['Watch','warn']:['Low','bad'];
+  const sRun=st(rw,6,3),sCol=st(collPct,85,65),sSal=sm==null?['n/a','neutral']:sm<=55?['Good','good']:sm<=65?['Watch','warn']:['High','bad'],sMar=st(mar,20,5);
+  box.innerHTML='<div class="kpis">'+kpi('Cash in hand',inr(c.cash),'')+kpi('Bank',inr(c.bank),'')+kpi('Total cash and bank',inr(c.liquid),'available now')+kpi('Fees to collect',inr(c.recv),'session '+S.year.label)+kpi('Monthly cash needed',inr(c.burn),'salaries, rent, other (last 3 months)')+kpi('Cash lasts',rw==null?'n/a':(rw<0?'0':rw.toFixed(1))+' months','if no new fees came in')+'</div>'+
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Health indicators</h2></div><div class="tablewrap"><table><thead><tr><th>Indicator</th><th class="r">Value</th><th>Status</th><th>How to read it</th></tr></thead><tbody>'+
+   '<tr><td>Cash runway</td><td class="r">'+(rw==null?'n/a':rw.toFixed(1)+' months')+'</td><td>'+finPill(sRun[0],sRun[1])+'</td><td class="muted small">6 months or more is comfortable</td></tr>'+
+   '<tr><td>Fees collected so far</td><td class="r">'+(collPct==null?'n/a':collPct.toFixed(0)+'%')+'</td><td>'+finPill(sCol[0],sCol[1])+'</td><td class="muted small">of '+inr(c.R0)+' billed this session after concessions</td></tr>'+
+   '<tr><td>Salaries as share of fees</td><td class="r">'+(sm==null?'n/a':sm.toFixed(0)+'%')+'</td><td>'+finPill(sSal[0],sSal[1])+'</td><td class="muted small">projected for the year; schools usually aim for 55% or less</td></tr>'+
+   '<tr><td>Operating margin (EBITDA)</td><td class="r">'+(mar==null?'n/a':mar.toFixed(0)+'%')+'</td><td>'+finPill(sMar[0],sMar[1])+'</td><td class="muted small">before depreciation, on recorded and estimated costs</td></tr>'+
+   '<tr><td>Current ratio</td><td class="r">'+(cr==null?'n/a':cr.toFixed(1))+'</td><td>'+finPill(cr==null?'n/a':cr>=1.5?'Good':cr>=1?'Watch':'Low',cr==null?'neutral':cr>=1.5?'good':cr>=1?'warn':'bad')+'</td><td class="muted small">(cash + fees to collect) / short-term dues</td></tr>'+
+   '<tr><td>Quick ratio</td><td class="r">'+(qr==null?'n/a':qr.toFixed(1))+'</td><td>'+finPill(qr==null?'n/a':qr>=1?'Good':'Low',qr==null?'neutral':qr>=1?'good':'bad')+'</td><td class="muted small">cash only / short-term dues</td></tr></tbody></table></div></div>'+
+   '<div class="grid2e" style="margin-top:12px"><div class="card"><div class="card-head"><h2>Projected year '+esc(S.year.label)+'</h2></div><div class="tablewrap"><table><tbody>'+
+   [['Fees billed (after concessions)',c.R0],['Salaries',-c.P0],['Rent',-c.Rent0],['Other recorded costs',-c.Oth0],['Estimated unrecorded costs',-c.U],['EBITDA',c.EBITDA0],['Depreciation',-c.depFY],['EBIT (operating surplus)',c.EBIT0]].map((r,i)=>'<tr'+(i===5||i===7?' class="total"':'')+'><td>'+r[0]+'</td><td class="r">'+inr(r[1])+'</td></tr>').join('')+'</tbody></table></div><p class="muted small" style="margin-top:8px">Costs so far plus the last 3 months\' average for the months left.</p></div>'+
+   '<div class="card"><div class="card-head"><h2>Balance position today</h2></div><div class="tablewrap"><table><tbody>'+
+   [['Cash and bank',c.liquid],['Fees to collect',c.recv],['Assets (after depreciation)',c.fixedNet],['Fees received in advance, salary and other dues',-c.liabCur],['Loans',-c.loans]].map(r=>'<tr><td>'+r[0]+'</td><td class="r">'+inr(r[1])+'</td></tr>').join('')+'<tr class="total"><td>Net position</td><td class="r">'+inr(c.liquid+c.recv+c.fixedNet-c.liabCur-c.loans)+'</td></tr></tbody></table></div><p class="muted small" style="margin-top:8px">Staff holdback payable of '+inr(c.hold)+' is due to staff in April.</p></div></div>'+finNotes(c,D);
+}
+function finCash(box,c,D){
+  const B=[['fees','Fees collected'],['othinc','Other income'],['sal','Salaries'],['rent','Rent'],['oth','Other expenses'],['capex','Assets bought'],['liab','Dues paid'],['open','Opening balances'],['xfer','Cash/bank transfers'],['other','Other']];
+  const used=B.filter(b=>c.cfRows.some(r=>r.b[b[0]]));
+  const hist=c.cfRows.map(r=>({m:r.m,y:r.close}));
+  box.innerHTML='<div class="card"><div class="card-head"><h2>Cash and bank balance by month</h2></div>'+(hist.length>1?lineChart(hist,[],'Cash and bank balance by month'):'<p class="muted">Needs at least two months.</p>')+'</div>'+
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Cash flow · session '+esc(S.year.label)+'</h2><button class="btn ghost sm" id="fcsv">Download</button></div><div class="tablewrap"><table><thead><tr><th>Month</th><th class="r">Opening</th>'+used.map(b=>'<th class="r">'+b[1]+'</th>').join('')+'<th class="r">Net</th><th class="r">Closing</th></tr></thead><tbody>'+
+   c.cfRows.map(r=>'<tr><td class="nowrap">'+monthLabel(r.m)+'</td><td class="r">'+inr(r.open)+'</td>'+used.map(b=>'<td class="r">'+(r.b[b[0]]?inr(r.b[b[0]]):'<span class="muted">-</span>')+'</td>').join('')+'<td class="r"><b>'+inr(r.net)+'</b></td><td class="r"><b>'+inr(r.close)+'</b></td></tr>').join('')+'</tbody></table></div><p class="muted small" style="margin-top:8px">Cash and bank only. Closing balance should match Cash in hand + Bank ('+inr(c.liquid)+'): '+(Math.abs((c.cfRows.length?c.cfRows[c.cfRows.length-1].close:0)-c.liquid)<1?'it does.':'it differs, because of entries dated outside this session.')+'</p></div>'+finNotes(c,D);
+  $('#fcsv').onclick=()=>csvDownload('cash-flow-'+S.year.label+'.csv',[['Month','Opening'].concat(used.map(b=>b[1]),['Net','Closing'])].concat(c.cfRows.map(r=>[r.m,r.open].concat(used.map(b=>r.b[b[0]]||0),[r.net,r.close]))));
+}
+function finAssets(box,c,D){
+  const todayM=c.cur,sched=a=>{let n=0;for(let m=fkey(a.purchase_date);m<=todayM;m=addMonth(m,1))n+=finMonthDep(a,m);return n};
+  const lastDone=addMonth(c.cur,-1),posted=new Set(D.runs.map(r=>fkey(r.month)));
+  const due=[];for(let m=c.fyM[0];m<=lastDone&&m<=c.fyM[11];m=addMonth(m,1))if(!posted.has(m)&&sum(D.assets.map(a=>finMonthDep(a,m)))>0)due.push(m);
+  const tc=sum(D.assets.map(a=>num(a.cost))),ta=sum(D.assets.map(a=>Math.min(sched(a),num(a.cost))));
+  box.innerHTML='<div class="toolbar"><button class="btn" id="aAdd">Add asset</button>'+(due.length?'<button class="btn ghost" id="aDep">Post depreciation ('+due.length+' month'+(due.length>1?'s':'')+')</button>':'')+'</div>'+
+   '<div class="kpis" style="margin-top:12px">'+kpi('Assets at cost',inr(tc),D.assets.length+' items')+kpi('Depreciation so far',inr(ta),'straight line')+kpi('Book value',inr(tc-ta),'')+kpi('Depreciation this session',inr(c.depFY),'full year')+'</div>'+
+   (D.assets.length?'<div class="card" style="margin-top:12px"><div class="tablewrap"><table><thead><tr><th>Asset</th><th>Type</th><th>Date</th><th class="r">Cost</th><th class="r">Life</th><th class="r">Per year</th><th class="r">Depreciated</th><th class="r">Book value</th></tr></thead><tbody>'+D.assets.map(a=>{const d=Math.min(sched(a),num(a.cost));return'<tr><td>'+esc(a.name)+(a.notes?'<br><span class="muted small">'+esc(a.notes)+'</span>':'')+'</td><td>'+esc(a.category)+'</td><td class="nowrap">'+fmtDate(a.purchase_date)+'</td><td class="r">'+inr(a.cost)+'</td><td class="r">'+(a.life_years?num(a.life_years)+' yrs':'-')+'</td><td class="r">'+(a.life_years?inr((num(a.cost)-num(a.salvage_value))/num(a.life_years)):'-')+'</td><td class="r">'+inr(d)+'</td><td class="r"><b>'+inr(num(a.cost)-d)+'</b></td></tr>'}).join('')+'</tbody></table></div></div>':'<div class="card empty" style="margin-top:12px">No assets yet. Add what the school owns: furniture, computers, building, vehicles.</div>')+
+   '<p class="muted small" style="margin-top:8px">Depreciation is straight line from the month of purchase. Posting it adds one entry per month to the books (Depreciation expense and Accumulated depreciation). For something the school already owned, choose &quot;Already owned&quot; and enter its present value and remaining life.</p>';
+  $('#aAdd').onclick=()=>formModal('Add asset',inp('name','Asset name','','text','required')+'<div class="row2">'+sel('category','Type',[['furniture','Furniture'],['equipment','Equipment'],['computers','Computers'],['vehicle','Vehicle'],['building','Building'],['land','Land (not depreciated)'],['other','Other']],'furniture')+inp('date','Date',today(),'date','required')+'</div><div class="row2">'+inp('cost','Cost / present value (₹)','','number','min="1" step="0.01" required')+inp('life','Useful life (years)','','number','min="0.5" step="0.5"','Leave empty for land')+'</div><div class="row2">'+inp('salvage','Residual value (₹)','0','number','min="0" step="0.01"')+sel('mode','Paid by',[['bank_transfer','Bank'],['cash','Cash'],['upi','UPI'],['cheque','Cheque'],['opening','Already owned (no payment now)']],'bank_transfer')+'</div>'+inp('notes','Note',''),'Save',async fd=>{
+    await rpc('asset_add',{p_name:fd.get('name'),p_category:fd.get('category'),p_date:fd.get('date'),p_cost:Number(fd.get('cost')),p_life:fd.get('life')?Number(fd.get('life')):null,p_salvage:Number(fd.get('salvage')||0),p_mode:fd.get('mode'),p_notes:fd.get('notes')});
+    closeModal();toast('Asset saved');vFinance($('#view'))});
+  if($('#aDep'))$('#aDep').onclick=async()=>{if(!confirm('Post depreciation for '+due.map(monthLabel).join(', ')+'? Each month adds one entry to the books.'))return;try{let t=0;for(const m of due)t+=num(await rpc('asset_depreciation_run',{p_month:m+'-01'}));toast('Depreciation posted: '+inr(t));vFinance($('#view'))}catch(e){toast(errMsg(e),true)}};
+}
+function finFc(box,c,D){
+  const A=c.A,base=c.fc(),lo=c.fc(Math.max(0,A.collEff-10)),hi=c.fc(Math.min(100,A.collEff+5));
+  const hist=[{m:c.cur,y:c.liquid}],fc=base.map((p,i)=>({m:p.m,y:p.close,lo:lo[i].close,hi:hi[i].close}));
+  const neg=base.find(p=>p.close<0),minP=base.slice().sort((a,b)=>a.close-b.close)[0];
+  box.innerHTML='<div class="card"><div class="card-head"><div><h2>Cash and bank balance, next 12 months</h2><p class="muted small">Starts from today\'s '+inr(c.liquid)+'. Band: fees collected '+Math.max(0,A.collEff-10)+'% to '+Math.min(100,A.collEff+5)+'% instead of '+A.collEff+'%.</p></div></div>'+lineChart(hist,fc,'Forecast cash and bank balance')+legendHTML+'</div>'+
+   '<div class="grid2e" style="margin-top:12px"><div class="card"><h2 style="margin-bottom:6px">What to expect</h2><ul class="list"><li><div>'+(neg?'Cash may run out in <b>'+monthLabel(neg.m)+'</b> (balance '+inr(neg.close)+'). Plan fee collection or costs before then.':'Cash stays positive for the next 12 months. Lowest point: <b>'+inr(minP.close)+'</b> in '+monthLabel(minP.m)+'.')+'</div></li><li><div>Fees still to collect this session: '+inr(c.recv)+', of which about '+A.collEff+'% is expected.</div></li><li><div>New session fees assumed at '+inr(c.R0*(1+A.feeHike/100)*(1+A.enrol/100))+' ('+A.feeHike+'% fee increase, '+A.enrol+'% more students).</div></li><li><div>Staff holdback of about '+inr(c.hold+c.rrH*(c.rem.length))+' is paid to staff in April.</div></li></ul><p class="muted small" style="margin-top:8px">Change the assumptions in the Assumptions tab. Tax is not included in this cash forecast.</p></div>'+
+   '<div class="card"><div class="tablewrap"><table><thead><tr><th>Month</th><th class="r">Fees in</th><th class="r">Salaries</th><th class="r">Rent</th><th class="r">Other</th><th class="r">Assets</th><th class="r">Holdback</th><th class="r">Closing</th></tr></thead><tbody>'+base.map(p=>'<tr><td class="nowrap">'+monthLabel(p.m)+'</td><td class="r">'+inr(p.coll)+'</td><td class="r">'+inr(-p.sal)+'</td><td class="r">'+inr(-p.rent)+'</td><td class="r">'+inr(-p.oth)+'</td><td class="r">'+inr(-p.capex)+'</td><td class="r">'+(p.release?inr(-p.release):'-')+'</td><td class="r"><b'+(p.close<0?' style="color:var(--bad,#b3261e)"':'')+'>'+inr(p.close)+'</b></td></tr>').join('')+'</tbody></table></div></div></div>'+finNotes(c,D);
+}
+function finDcf(box,c,D){
+  const A=c.A,r=finDCF(c,A.wacc,A.tg);
+  if(c.R0<=0){box.innerHTML='<div class="card empty">Fees billed for this session are needed first.</div>';return}
+  const ws=[-2,-1,0,1,2].map(d=>A.wacc+d),gs=[A.tg-1,A.tg,A.tg+1];
+  const cell=(w,g)=>{const x=finDCF(c,w,g);return x.ev==null?'<td class="r muted">n/a</td>':'<td class="r"'+(w===A.wacc&&g===A.tg?' style="font-weight:700;background:var(--surface2)"':'')+'>'+inrShort(x.ev)+'</td>'};
+  box.innerHTML=finNotes(c,D).replace('margin-top:12px','margin-bottom:12px')+'<div class="kpis">'+kpi('Enterprise value (DCF)',r.ev==null?'n/a':inr(r.ev),'WACC '+A.wacc+'%, growth '+A.tg+'%')+kpi('Equity value',r.eq==null?'n/a':inr(r.eq),'+ cash and bank '+inr(c.liquid)+(c.loans?' - loans '+inr(c.loans):''))+kpi('Value per student',r.eq==null||!c.students?'n/a':inr(r.eq/c.students),c.students+' students')+kpi('Terminal value share',r.ev?(r.pvTv/r.ev*100).toFixed(0)+'%':'n/a','of enterprise value')+'</div>'+
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>Free cash flow to the firm (FCFF)</h2><button class="btn ghost sm" id="dcsv">Download</button></div><div class="tablewrap"><table><thead><tr><th></th><th class="r">'+esc(S.year.label)+' (base)</th>'+r.yrs.map(y=>'<th class="r">'+y.l+'</th>').join('')+'</tr></thead><tbody>'+
+   [['Fees (after concessions)',c.R0,'rev'],['EBITDA',c.EBITDA0,'ebitda'],['Depreciation',-c.depFY,'dep',-1],['EBIT',c.EBIT0,'ebit'],['Tax on EBIT',null,'tax',-1],['NOPAT',null,'nopat'],['Add back depreciation',null,'dep'],['Less assets bought (capex)',null,'capex',-1],['Less increase in working capital',null,'dn',-1],['FCFF',null,'fcff'],['Discount factor',null,'df']].map(row=>{const bold=row[2]==='fcff'||row[2]==='nopat';return'<tr'+(bold?' class="total"':'')+'><td>'+row[0]+'</td><td class="r">'+(row[1]==null?'':inr(row[1]))+'</td>'+r.yrs.map(y=>'<td class="r">'+(row[2]==='df'?y.df.toFixed(3):inr((row[3]||1)*y[row[2]]))+'</td>').join('')+'</tr>'}).join('')+'</tbody></table></div>'+
+   '<p class="muted small" style="margin-top:8px">FCFF = EBIT after tax + depreciation - assets bought - increase in working capital. The base year uses the recorded books plus your estimates. '+(A.tax===0?'Tax is 0% (trust or society).':'')+'</p></div>'+
+   '<div class="grid2e" style="margin-top:12px"><div class="card"><div class="card-head"><h2>Value of the school</h2></div><div class="tablewrap"><table><tbody>'+
+   [['Present value of '+r.N+' years of FCFF',r.pv],['Terminal value (at year '+r.N+')',r.tv],['Present value of terminal value',r.pvTv],['Enterprise value',r.ev],['Add: cash and bank',c.liquid],['Less: loans',-c.loans],['Equity value',r.eq]].map((x,i)=>'<tr'+(i===3||i===6?' class="total"':'')+'><td>'+x[0]+'</td><td class="r">'+(x[1]==null?'n/a':inr(x[1]))+'</td></tr>').join('')+'</tbody></table></div></div>'+
+   '<div class="card"><div class="card-head"><h2>Enterprise value: WACC and growth</h2></div><div class="tablewrap"><table><thead><tr><th>WACC \\ growth</th>'+gs.map(g=>'<th class="r">'+g+'%</th>').join('')+'</tr></thead><tbody>'+ws.map(w=>'<tr><td>'+w+'%</td>'+gs.map(g=>cell(w,g)).join('')+'</tr>').join('')+'</tbody></table></div></div></div>'+
+   '<p class="muted small" style="margin-top:8px">A trust or society school cannot be sold for this value. Use it to compare years, test plans (fee increases, new classes) and understand how much cash the school generates. Results are only as good as the books and the assumptions.</p>';
+  $('#dcsv').onclick=()=>csvDownload('fcff-dcf.csv',[['Year','Fees','EBITDA','Depreciation','EBIT','Tax','NOPAT','Capex','Change in working capital','FCFF','Discount factor']].concat(r.yrs.map(y=>[y.l,y.rev,y.ebitda,y.dep,y.ebit,y.tax,y.nopat,y.capex,y.dn,y.fcff,y.df])));
+}
+function finSettings(box,c,D){
+  const A=c.A;
+  box.innerHTML='<div class="card"><div class="card-head"><h2>Assumptions</h2></div><p class="muted small" style="margin-bottom:10px">These drive the Forecast and the FCFF and DCF tabs. The starting values are only placeholders. Please set them to what you expect.</p><form id="fsf" style="display:grid;gap:12px">'+
+   '<div class="row2">'+FIN_LABELS.map(l=>inp('f_'+l[0],l[1],A[l[0]],'number','step="any"')).join('')+'</div><div class="actions"><button type="button" class="btn ghost" id="fdef">Reset to starting values</button><button class="btn" type="submit">Save</button></div></form>'+
+   '<p class="muted small" style="margin-top:10px">Reference from the books: fees to collect '+inr(c.recv)+', working capital now '+inr(c.nwcNow)+' ('+(c.R0?(c.nwcNow/c.R0*100).toFixed(0):'0')+'% of fees; the year-end figure is usually much lower). Cost growth uses salary increase plus half of student growth for staff.</p></div>';
+  const save=async data=>{await q(sb.from('finance_settings').upsert({id:true,data,updated_at:new Date().toISOString()}));toast('Saved');vFinance($('#view'))};
+  $('#fsf').onsubmit=async e=>{e.preventDefault();try{const d={};FIN_LABELS.forEach(l=>{const v=Number($('#f_'+l[0]).value);if(!isFinite(v)||v<0)throw new Error('Check: '+l[1]);d[l[0]]=v});if(d.wacc<=d.tg)throw new Error('WACC must be higher than long-term growth');await save(d)}catch(er){toast(errMsg(er),true)}};
+  $('#fdef').onclick=()=>save({});
 }
 
 /* =================================================================

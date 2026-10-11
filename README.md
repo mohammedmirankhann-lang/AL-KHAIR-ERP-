@@ -41,3 +41,10 @@ Report cards, grades, AI summaries, WhatsApp sending through the official API.
 - Class teacher fills Report details (traits, remark, height, weight) per evaluation. Eval-I = first half of the exams, Eval-II = second half. Attendance: Eval-I counts up to 30 Sep, Eval-II is cumulative.
 - Subjects can have a report heading and component (Setup > Add subject), e.g. LITERACY SKILLS / Written. Arabic and Islamiyat components are on the separate Deeniyat card.
 - Grades come from the grading key: 91-100 A1, 81-90 A2, 71-80 B1, 61-70 B2, 51-60 C1, 41-50 C2, 33-40 D, below 33 E.
+
+
+## Finance tab
+- Tabs: Health (cash, runway, ratios, projected year), Cash flow (by month), Assets (register, depreciation posted to the books), Forecast (12-month cash with a range), FCFF and DCF (valuation with sensitivity), Assumptions (saved in the database, shared by owner and accountant).
+- Everything is calculated from the books. The numbers are only as complete as the entries in Accounts: record all expenses (electricity, stationery, repairs...) or put a monthly estimate in Assumptions.
+- Assets: add with Already owned (opening) for existing items, enter present value and remaining life. Post depreciation monthly (one entry per finished month).
+- Database: migration 16 (fixed_assets, asset_dep_runs, finance_settings, fin_ledger, fin_cashflow, asset_add, asset_depreciation_run).
