@@ -445,6 +445,8 @@ let stuState={q:'',cls:'all',flt:'all'};
 async function vStudents(el){
   const [rows,miss]=await Promise.all([summaryRows(),all((a,b)=>sb.from('v_student_missing_documents').select('student_id').range(a,b))]);
   const missCount={};miss.forEach(m=>{missCount[m.student_id]=(missCount[m.student_id]||0)+1});
+  const sm=await all((a,b)=>sb.from('students').select('id,father_name,guardian_mobile').range(a,b)),smBy=Object.fromEntries(sm.map(x=>[x.id,x]));
+  rows.forEach(r=>{const x=smBy[r.student_id]||{};r.father_name=x.father_name;r.guardian_mobile=x.guardian_mobile});
   const idr=await all((a,b)=>sb.from('v_student_id_status').select('student_id,has_pen,has_apaar,has_aadhaar,has_samagra,req_pen,req_apaar,req_aadhaar,req_samagra').range(a,b));idr.forEach(r=>{const n=IDS.filter(i=>idMiss(r,i[0])).length;if(n)missCount[r.student_id]=(missCount[r.student_id]||0)+n});
   const order=S.classes.map(c=>c.name),byCls={};
   rows.forEach(r=>{(byCls[r.class_name]=byCls[r.class_name]||[]).push(r)});
@@ -456,8 +458,8 @@ async function vStudents(el){
    '<div class="toolbar" style="margin-bottom:10px"><input class="input" id="sq" placeholder="Search name or admission no, across all classes" aria-label="Search" value="'+esc(stuState.q)+'">'+
    '<select class="input" id="sf" aria-label="Filter">'+[['all','Everyone'],['due','Has fee dues'],['paid','Fully paid'],['nofee','No fee set'],['docs','Documents missing']].map(o=>'<option value="'+o[0]+'"'+(stuState.flt===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select><span class="muted small" id="scount"></span></div>'+
    '<div id="chips" role="group" aria-label="Class" style="display:flex;gap:6px;overflow-x:auto;padding:2px 0 12px;margin-bottom:2px"></div><div id="stbl"></div>';
-  const trs=(list,showCls)=>list.map(r=>{const st=payStatus(r),mc=missCount[r.student_id]||0;return'<tr class="click" data-e="'+esc(r.enrollment_id)+'"><td class="nowrap">'+esc(r.admission_no)+'</td><td><a href="#/student/'+esc(r.enrollment_id)+'">'+esc(r.full_name)+'</a></td>'+(showCls?'<td class="nowrap">'+esc(r.class_name)+'</td>':'')+'<td class="r">'+inr(num(r.gross_fee)+num(r.previous_dues))+'</td><td class="r">'+(num(r.discount)?inr(r.discount):'<span class="muted">-</span>')+'</td><td class="r">'+inr(r.paid)+'</td><td class="r"><b>'+inr(Math.max(0,num(r.balance)))+'</b> <span class="pill '+st[1]+'">'+st[0]+'</span></td><td>'+(mc?'<span class="pill warn">'+mc+' missing</span>':'<span class="pill good">Complete</span>')+'</td></tr>'}).join('');
-  const tbl=(list,showCls)=>'<div class="tablewrap"><table><thead><tr><th>Adm no</th><th>Name</th>'+(showCls?'<th>Class</th>':'')+'<th class="r">Fee due</th><th class="r">Discount</th><th class="r">Paid</th><th class="r">Balance</th><th>Documents</th></tr></thead><tbody>'+trs(list,showCls)+'</tbody></table></div>';
+  const trs=(list,showCls)=>list.map(r=>{const st=payStatus(r),mc=missCount[r.student_id]||0;return'<tr class="click" data-e="'+esc(r.enrollment_id)+'"><td class="nowrap">'+esc(r.admission_no)+'</td><td><a href="#/student/'+esc(r.enrollment_id)+'">'+esc(r.full_name)+'</a><div class="muted small">'+esc([r.father_name,r.guardian_mobile].filter(Boolean).join(' · '))+'</div></td>'+(showCls?'<td class="nowrap">'+esc(r.class_name)+'</td>':'')+'<td><span class="pill '+st[1]+'">'+st[0]+'</span>'+(num(r.balance)>0?' <span class="small"><b>'+inr(Math.max(0,num(r.balance)))+'</b> due</span>':'')+'</td><td>'+(mc?'<span class="pill warn">'+mc+' missing</span>':'<span class="pill good">Complete</span>')+'</td></tr>'}).join('');
+  const tbl=(list,showCls)=>'<div class="tablewrap"><table><thead><tr><th>Adm no</th><th>Student</th>'+(showCls?'<th>Class</th>':'')+'<th>Fee status</th><th>Document status</th></tr></thead><tbody>'+trs(list,showCls)+'</tbody></table></div>';
   function paint(){
     const t=stuState.q.trim().toLowerCase(),filtering=!!t||stuState.flt!=='all';
     const pass=r=>(!t||(r.full_name+' '+r.admission_no).toLowerCase().includes(t))&&(stuState.flt==='all'||(stuState.flt==='due'&&num(r.balance)>0)||(stuState.flt==='paid'&&num(r.balance)<=0&&num(r.gross_fee)>0)||(stuState.flt==='nofee'&&num(r.gross_fee)===0)||(stuState.flt==='docs'&&missCount[r.student_id]));
@@ -467,7 +469,7 @@ async function vStudents(el){
     if(stuState.cls!=='all'&&byCls[stuState.cls]){
       const all_=byCls[stuState.cls],list=all_.filter(pass),g=agg(all_);
       $('#scount').textContent=list.length+' of '+all_.length+' students';
-      h='<div class="kpis">'+kpi('Students',String(g.n),g.due+' with fee dues')+kpi('Fee to collect',inr(g.net),'after discounts')+kpi('Collected',inr(g.paid),g.pct+'% of fee')+kpi('Balance',inr(g.bal),g.dm+' students with documents missing')+'</div><div style="margin:4px 0 14px">'+bar(g.pct)+'</div>'+
+      h='<p class="small" style="margin-bottom:8px"><a href="#/students" id="bcAll">Students</a> &rsaquo; <b>'+esc(stuState.cls)+'</b></p><div class="kpis">'+kpi('Students',String(g.n),g.due+' with fee dues')+kpi('Fee to collect',inr(g.net),'after discounts')+kpi('Collected',inr(g.paid),g.pct+'% of fee')+kpi('Balance',inr(g.bal),g.dm+' students with documents missing')+'</div><div style="margin:4px 0 14px">'+bar(g.pct)+'</div>'+
         (list.length?'<div class="card">'+tbl(list,false)+'</div>':'<div class="card empty">No students match in this class.</div>');
     }else if(filtering){
       let n=0;
@@ -481,6 +483,7 @@ async function vStudents(el){
         (rows.length?'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:14px">'+clsList.map(cn=>{const a=agg(byCls[cn]);return'<button type="button" class="card" data-open="'+esc(cn)+'" style="text-align:left;cursor:pointer;display:grid;gap:8px;font:inherit;color:inherit"><div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:17px">'+esc(cn)+'</b><span class="muted small">'+a.n+' students</span></div>'+bar(a.pct)+'<div class="small"><b>'+a.pct+'%</b> collected · due '+inr(a.bal)+'</div><div>'+(a.dm?'<span class="pill warn">'+a.dm+' docs missing</span>':'<span class="pill good">Documents complete</span>')+'</div></button>'}).join('')+'</div>':'<div class="card empty">No students yet. Use Add student or Import.</div>');
     }
     $('#stbl').innerHTML=h;
+    if($('#bcAll'))$('#bcAll').onclick=e=>{e.preventDefault();stuState.cls='all';paint()};
     $$('#stbl [data-open]').forEach(b=>b.onclick=()=>{stuState.cls=b.dataset.open;paint();window.scrollTo(0,0)});
     $$('#stbl tr.click').forEach(tr=>tr.addEventListener('click',e=>{if(e.target.tagName!=='A')location.hash='#/student/'+tr.dataset.e}));
   }
@@ -643,8 +646,9 @@ async function vStudent(el,enrId){
   const net=num(fs.gross_fee)-num(fs.discount)+num(fs.previous_dues);
   let od=[];try{od=await q(sb.from('old_dues').select('*').eq('student_id',en.student_id).in('status',['open','linked']))}catch(e){}
   const odBanner=od.length?'<p class="banner" style="margin-bottom:12px"><b>Previous session dues:</b> '+od.map(o=>inr(o.amount)+' ('+esc(o.year_label)+', '+esc(o.class_name||'')+')').join(', ')+'. Not included in this session\'s fees. <a href="#/olddues">Old dues</a></p>':'';
-  el.innerHTML='<p class="small"><a href="#/students">&larr; All students</a></p>'+
+  el.innerHTML='<p class="small"><a href="#/students" data-bc="all">Students</a> &rsaquo; <a href="#/students" data-bc="cls">'+esc(cls.name)+'</a> &rsaquo; <b>'+esc(stu.full_name)+'</b></p>'+
    head(stu.full_name,'Admission no '+stu.admission_no+' · '+cls.name+' · '+S.year.label,'<span class="pill '+(stu.status==='active'?'good':'neutral')+'">'+esc(stu.status)+'</span><button class="btn ghost" id="editStu">Edit details</button>')+odBanner+
+   (missing.length?'<p class="banner" style="margin-bottom:12px"><b>Documents missing:</b> '+missing.map(d=>esc(d.name)).join(', ')+'. Upload them in the Documents box below.</p>':'')+
    '<div class="kpis">'+kpi('Fee due',inr(net),'Fee '+inr(fs.gross_fee)+' − discount '+inr(fs.discount)+(num(fs.previous_dues)?' + previous '+inr(fs.previous_dues):''))+kpi('Paid',inr(fs.paid),payments(pay).n+' payments')+kpi('Balance',inr(Math.max(0,num(fs.balance))),st[0])+kpi('Documents',missing.length?missing.length+' missing':'Complete',required.length-missing.length+' of '+required.length+' uploaded'+(unchecked?' · '+unchecked+' not checked':''))+'</div>'+
    '<div class="grid2e">'+
    '<div class="card"><div class="card-head"><h2>Fee and discount</h2><div class="toolbar"><button class="btn" id="collect"'+(num(fs.balance)>0?'':' disabled')+'>Collect payment</button></div></div>'+
@@ -657,6 +661,7 @@ async function vStudent(el,enrId){
      (has?'<button class="btn ghost sm" data-doc="view" data-t="'+esc(d.id)+'">View</button><button class="btn ghost sm" data-doc="upload" data-t="'+esc(d.id)+'">Replace</button>'+(x.checked?'':'<button class="btn ghost sm" data-doc="check" data-t="'+esc(d.id)+'">Mark checked</button>'):(na?'<button class="btn ghost sm" data-doc="clear" data-t="'+esc(d.id)+'">Clear</button>':'<button class="btn sm" data-doc="upload" data-t="'+esc(d.id)+'">Upload</button><button class="btn ghost sm" data-doc="not_applicable" data-t="'+esc(d.id)+'">N/A</button>'))+'</div></li>'}).join('')+'</ul></div></div>'+
    '<div class="card"><h2 style="margin-bottom:10px">Payments</h2>'+(pay.length?'<div class="tablewrap"><table><thead><tr><th>Receipt</th><th>Date</th><th>Mode</th><th class="r">Amount</th><th>Status</th><th></th></tr></thead><tbody>'+pay.map(p=>'<tr><td class="nowrap">'+esc(p.receipt_no)+'</td><td class="nowrap">'+fmtDate(p.paid_on)+'</td><td>'+esc(p.mode)+(p.reference?' <span class="muted small">'+esc(p.reference)+'</span>':'')+'</td><td class="r">'+inr(p.amount)+'</td><td><span class="pill '+(p.status==='posted'?'good':'neutral')+'">'+(p.status==='posted'?'Paid':'Reversed')+'</span></td><td class="r nowrap"><button class="btn ghost sm" data-rc="'+esc(p.id)+'">Receipt</button> '+(p.status==='posted'?'<button class="btn danger sm" data-revpay="'+esc(p.id)+'">Reverse</button>':'')+'</td></tr>').join('')+'</tbody></table></div>':'<p class="muted">No payments yet.</p>')+'</div>';
   const again=()=>route();
+  $$('[data-bc]').forEach(a=>a.addEventListener('click',()=>{stuState.cls=a.dataset.bc==='cls'?cls.name:'all'}));
   $('#editStu').onclick=()=>formModal('Edit details',studentFields(stu),'Save',async fd=>{
     const p=studentPayload(fd);if(!p.admission_no||!p.full_name)throw new Error('Admission no and name are required');
     await q(sb.from('students').update(p).eq('id',stu.id));closeModal();toast('Saved');again();},{wide:true});
