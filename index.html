@@ -208,7 +208,7 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;background:var(--
 <div id="app" hidden>
   <header class="hdr"><div class="hdr-in">
     <div class="brand"><img class="logo" alt="Al-Khair Academy logo"><div class="bt"><b>AL-KHAIR ACADEMY</b><i>Success Here and the Hereafter</i></div></div>
-    <div class="hdr-right"><span class="who" id="who"></span><button class="btn ghost sm" id="logout" style="color:#fff;border-color:rgba(255,255,255,.4)">Sign out</button></div>
+    <div class="hdr-right"><select id="wspace" aria-label="Workspace" hidden style="background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:8px;padding:5px 8px;font:inherit;font-size:13px"><option value="owner" style="color:#000">Owner (all)</option><option value="accountant" style="color:#000">Accounts and Administration</option><option value="coordinator" style="color:#000">Coordinator</option></select><span class="who" id="who"></span><button class="btn ghost sm" id="logout" style="color:#fff;border-color:rgba(255,255,255,.4)">Sign out</button></div>
   </div></header>
   <nav class="tabs"><div class="tabs-in" id="nav" aria-label="Sections"></div></nav>
   <main id="view"></main>
@@ -387,7 +387,7 @@ async function route(){
   const r=currentRoute(),view=$('#view');
   if(S.user.user_metadata&&S.user.user_metadata.temp_password){$('#nav').innerHTML='';await vSetPassword(view);return}
   if(S.profile&&S.profile.role==='teacher'){const tn=[['me','My attendance'],['attendance','Class attendance'],['marks','Marks'],['traits','Report details']],tr=(r.name==='dashboard'?'me':r.name);$('#nav').innerHTML=tn.map(n=>'<a href="#/'+n[0]+'"'+(tr===n[0]?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');view.innerHTML='<p class="muted">Loading…</p>';const tf={attendance:vTAttendance,marks:vTMarks,traits:vTTraits}[tr]||vMyAttendance;try{await tf(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
-  const role=(S.profile&&S.profile.role)||'owner',nav=NAV_BY_ROLE[role]||NAV;
+  const role=S.profile&&S.profile.role==='owner'?(S.mode||'owner'):((S.profile&&S.profile.role)||'owner'),nav=NAV_BY_ROLE[role]||NAV;
   const okNames=nav.map(n=>n[0]).concat(role==='coordinator'?[]:['student','olddues']);
   if(!okNames.includes(r.name)){r.name=nav[0][0];r.arg=null}
   $('#nav').innerHTML=nav.map(n=>'<a href="#/'+n[0]+'"'+((r.name===n[0]||(r.name==='student'&&n[0]==='students'))?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');
@@ -1054,6 +1054,7 @@ const DAYN=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 let staffTab='today',staffMonth=today().slice(0,7);
 const hhmm=ts=>ts?new Date(ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true}):'';
 const stPill=s=>{const x=ST_LABEL[s];return x?'<span class="pill '+x[1]+'">'+x[0]+'</span>':''};
+const wsRole=()=>S.profile.role==='owner'?(S.mode||'owner'):S.profile.role;
 const staffTbl=()=>S.profile&&S.profile.role==='coordinator'?'v_staff_directory':'staff';
 async function staffBase(){
   const coord=S.profile&&S.profile.role==='coordinator';
@@ -1447,9 +1448,9 @@ async function acSetup(box,B){
 async function vStaff(el){
   const B=await staffBase();
   const active=B.staff.filter(s=>s.status==='active');
-  el.innerHTML=head(S.profile.role==='coordinator'?'Teachers':'Staff',active.length+' active staff'+(B.cfg.geo_lat==null?' · school location not set':''),'')+
+  el.innerHTML=head(wsRole()==='coordinator'?'Teachers':'Staff',active.length+' active staff'+(B.cfg.geo_lat==null?' · school location not set':''),'')+
    (B.cfg.geo_lat==null?'<p class="banner" style="margin-bottom:12px">Set the school location in the Settings tab first. Teachers can punch only after that.</p>':'')+
-   '<div class="seg" role="group" aria-label="Staff view" style="justify-self:start;max-width:100%;overflow-x:auto">'+[['today','Today'],['month','Monthly'],['work','Teacher work'],['report','Attendance report'],['pay','Salary'],['dir','Staff list'],['set','Settings']].filter(t=>S.profile.role==='owner'||!['pay','set'].includes(t[0])).map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(staffTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="sbody" style="margin-top:14px;min-width:0;max-width:100%"></div>';
+   '<div class="seg" role="group" aria-label="Staff view" style="justify-self:start;max-width:100%;overflow-x:auto">'+[['today','Today'],['month','Monthly'],['work','Teacher work'],['report','Attendance report'],['pay','Salary'],['dir','Staff list'],['set','Settings']].filter(t=>wsRole()==='owner'||!['pay','set'].includes(t[0])).map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(staffTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="sbody" style="margin-top:14px;min-width:0;max-width:100%"></div>';
   $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{staffTab=b.dataset.t;vStaff(el)});
   const box=$('#sbody');
   try{
@@ -1647,7 +1648,7 @@ function staffPayload(fd){
   return o;
 }
 function stDir(box,B){
-  const own=S.profile.role==='owner';
+  const own=wsRole()==='owner';
   if(!own){box.innerHTML='<div class="card">'+(B.staff.length?'<div class="tablewrap"><table><thead><tr><th>Name</th><th>Designation</th><th>Subjects / classes</th><th>Mobile</th><th>Joined</th><th>Status</th></tr></thead><tbody>'+B.staff.map(s=>'<tr><td>'+esc(s.full_name)+'</td><td>'+esc(s.designation||'')+'</td><td>'+esc([s.subjects,s.classes_taught].filter(Boolean).join(' · '))+'</td><td class="nowrap">'+esc(s.phone||'')+'</td><td class="nowrap">'+fmtDate(s.joined_on)+'</td><td><span class="pill '+(s.status==='active'?'good':'neutral')+'">'+(s.status==='active'?'Working':'Left')+'</span></td></tr>').join('')+'</tbody></table></div>':'<p class="muted">No staff yet.</p>')+'<p class="muted small" style="margin-top:8px">Staff details and salary are managed by the owner.</p></div>';return}
   box.innerHTML='<div class="toolbar" style="margin-bottom:10px"><button class="btn" id="sadd">Add staff</button><button class="btn ghost" id="simp">Import from Excel</button><input type="file" id="sfile" accept=".xlsx,.xls,.csv" hidden></div>'+
    '<div class="card">'+(B.staff.length?'<div class="tablewrap"><table><thead><tr><th>Name</th><th>Designation</th><th>Subjects / classes</th><th>Mobile</th><th>Joined</th><th class="r">Salary</th><th>Login</th><th>Status</th></tr></thead><tbody>'+
@@ -1773,7 +1774,8 @@ async function startApp(session){
       $('#boot').hidden=true;$('#app').hidden=true;$('#gate').hidden=false;
       $('#lerr').textContent='This account does not have access yet. Ask the owner to add you.';await sb.auth.signOut();S.user=null;return}
     S.profile=prof;if(prof.role!=='teacher')await loadRef();
-    $('#who').textContent=prof.full_name+' · '+(ROLE_LABEL[prof.role]||'');$('#boot').hidden=true;$('#gate').hidden=true;$('#app').hidden=false;
+    $('#who').textContent=prof.full_name+(prof.role==='owner'?'':' · '+(ROLE_LABEL[prof.role]||''));
+    const ws=$('#wspace');ws.hidden=prof.role!=='owner';if(prof.role==='owner'){S.mode=S.mode||'owner';ws.value=S.mode;ws.onchange=()=>{S.mode=ws.value;location.hash=(NAV_BY_ROLE[S.mode][0][0]==='dashboard'?'#/dashboard':'#/'+NAV_BY_ROLE[S.mode][0][0]);route()}}$('#boot').hidden=true;$('#gate').hidden=true;$('#app').hidden=false;
     await route();
   }catch(e){console.error(e);$('#boot').hidden=true;$('#gate').hidden=false;$('#lerr').textContent='Could not load: '+errMsg(e)}
 }
