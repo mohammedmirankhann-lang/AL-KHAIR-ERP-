@@ -455,11 +455,11 @@ async function vStudents(el){
   const clsList=order.filter(n=>byCls[n]).concat(Object.keys(byCls).filter(n=>!order.includes(n)));
   const agg=rs=>{const net=rs.reduce((t,r)=>t+num(r.gross_fee)+num(r.previous_dues)-num(r.discount),0),paid=rs.reduce((t,r)=>t+num(r.paid),0),bal=rs.reduce((t,r)=>t+Math.max(0,num(r.balance)),0),dm=rs.filter(r=>missCount[r.student_id]).length;return{n:rs.length,net,paid,bal,dm,pct:net>0?Math.min(100,Math.round(paid/net*100)):0,due:rs.filter(r=>num(r.balance)>0).length}};
   const bar=(pct)=>'<div style="height:8px;border-radius:99px;background:var(--surface2);overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+(pct>=75?'var(--good)':pct>=40?'var(--warn)':'var(--bad)')+'"></div></div>';
-  const segH='<div class="seg" role="group" aria-label="Students view" style="justify-self:start;margin-bottom:12px">'+[['classes','Classes'],['docs','Document tracker']].map(t=>'<button type="button" data-v="'+t[0]+'" aria-pressed="'+(stuState.view===t[0])+'">'+t[1]+'</button>').join('')+'</div>';
+  const segH='<div class="seg" role="group" aria-label="Students view" style="justify-self:start;margin-bottom:12px">'+[['classes','Classes'],['docs','Document tracker'],['portal','Portal export']].map(t=>'<button type="button" data-v="'+t[0]+'" aria-pressed="'+(stuState.view===t[0])+'">'+t[1]+'</button>').join('')+'</div>';
   const segBind=()=>$$('.seg button[data-v]').forEach(b=>b.onclick=()=>{stuState.view=b.dataset.v;vStudents(el)});
-  if(stuState.view==='docs'){
+  if(stuState.view==='docs'||stuState.view==='portal'){
     el.innerHTML=head('Students','Session '+S.year.label+' · '+rows.length+' students in '+clsList.length+' classes','<button class="btn" id="addStu">Add student</button>')+segH+'<div id="docbox"></div>';
-    segBind();$('#addStu').onclick=()=>addStudentModal();await vDocuments($('#docbox'),null,true);return}
+    segBind();$('#addStu').onclick=()=>addStudentModal();if(stuState.view==='portal')await vPortal($('#docbox'),rows);else await vDocuments($('#docbox'),null,true);return}
   el.innerHTML=head('Students','Session '+S.year.label+' · '+rows.length+' students in '+clsList.length+' classes','<button class="btn" id="addStu">Add student</button>')+segH+
    '<div class="toolbar" style="margin-bottom:10px"><input class="input" id="sq" placeholder="Search name or admission no, across all classes" aria-label="Search" value="'+esc(stuState.q)+'">'+
    '<select class="input" id="sf" aria-label="Filter">'+[['all','Everyone'],['due','Has fee dues'],['paid','Fully paid'],['nofee','No fee set'],['docs','Documents missing']].map(o=>'<option value="'+o[0]+'"'+(stuState.flt===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select><span class="muted small" id="scount"></span></div>'+
@@ -532,6 +532,47 @@ function addStudentModal(){
 const IDS=[['has_pen','PEN'],['has_apaar','APAAR'],['has_aadhaar','Aadhaar'],['has_samagra','Samagra']];
 const idMiss=(r,k)=>r['req_'+k.slice(4)]!==false&&!r[k];
 let docState={q:'',cls:'all',miss:'any'};
+
+/* ---------- Portal export: UDISE+ (SDMS) and MP Education Portal 3.0. Checks every student, then exports ready data. ---------- */
+let portalState={cls:'all',show:'issues'};
+const dig=v=>String(v||'').replace(/\D/g,'');
+function portalCheck(st,clsName){
+  const is=[],early=clsName==='Nursery';
+  if(!early){if(dig(st.pen).length!==11)is.push(dig(st.pen)?'PEN is not 11 digits':'PEN missing');if(dig(st.apaar_id).length!==12)is.push(dig(st.apaar_id)?'APAAR is not 12 digits':'APAAR missing')}
+  if(dig(st.samagra_id).length!==9)is.push(dig(st.samagra_id)?'Samagra ID is not 9 digits':'Samagra ID missing');
+  if(st.family_id&&dig(st.family_id).length!==8)is.push('Family ID is not 8 digits');
+  if(!st.dob)is.push('Date of birth missing');
+  if(!st.gender)is.push('Gender missing');
+  if(!(st.father_name||'').trim())is.push('Father name missing');
+  if(dig(st.guardian_mobile).slice(-10).length!==10)is.push('Mobile is not 10 digits');
+  return is}
+async function vPortal(el,rows){
+  const stus=await all((a,b)=>sb.from('students').select('*').range(a,b)),by=Object.fromEntries(stus.map(x=>[x.id,x]));
+  const list=rows.map(r=>({r,st:by[r.student_id]||{}})).filter(x=>x.st.id);
+  const dup={};[['pen','PEN'],['apaar_id','APAAR'],['samagra_id','Samagra ID']].forEach(([k,l])=>{const m={};list.forEach(x=>{const v=dig(x.st[k]);if(v)(m[v]=m[v]||[]).push(x)});Object.values(m).forEach(g=>{if(g.length>1)g.forEach(x=>{(x.dup=x.dup||[]).push(l+' is also on '+g.filter(y=>y!==x).map(y=>y.st.full_name).join(', '))})})});
+  list.forEach(x=>{x.issues=portalCheck(x.st,x.r.class_name).concat(x.dup||[])});
+  const cls=portalState.cls,scope=list.filter(x=>cls==='all'||x.r.class_name===cls),bad=scope.filter(x=>x.issues.length),ok=scope.length-bad.length;
+  const count=t=>scope.filter(x=>x.issues.some(i=>i.startsWith(t))).length;
+  el.innerHTML='<p class="muted small" style="margin-bottom:10px">Checks every student against the government portal rules (PEN 11 digits, APAAR 12 digits, Samagra ID 9 digits, family ID 8 digits) before you upload to UDISE+ (SDMS) or Education Portal 3.0. PEN and APAAR are not required for Nursery.</p>'+
+   '<div class="toolbar" style="margin-bottom:10px"><select class="input" id="pc" aria-label="Class"><option value="all">All classes</option>'+S.classes.map(c=>'<option value="'+esc(c.name)+'"'+(cls===c.name?' selected':'')+'>'+esc(c.name)+'</option>').join('')+'</select>'+
+   '<select class="input" id="ps" aria-label="Show"><option value="issues"'+(portalState.show==='issues'?' selected':'')+'>Students to fix</option><option value="all"'+(portalState.show==='all'?' selected':'')+'>Everyone</option></select>'+
+   '<button class="btn" id="px">Download for portal</button><button class="btn ghost" id="pxo"'+(ok?'':' disabled')+'>Download ready students only</button></div>'+
+   '<div class="kpis">'+kpi('Ready to upload',ok+' of '+scope.length,'all fields valid')+kpi('Need fixing',String(bad.length),'see the list below')+kpi('PEN missing',String(count('PEN')),'')+kpi('APAAR missing',String(count('APAAR')),'')+kpi('Samagra ID missing',String(count('Samagra')),'')+'</div>'+
+   '<div class="card" style="margin-top:12px">'+(function(){const show=(portalState.show==='issues'?bad:scope).slice(0,200);return show.length?'<div class="tablewrap"><table><thead><tr><th>Adm no</th><th>Student</th><th>Class</th><th>Status</th></tr></thead><tbody>'+show.map(x=>'<tr class="click" data-e="'+esc(x.r.enrollment_id)+'"><td class="nowrap">'+esc(x.r.admission_no)+'</td><td><a href="#/student/'+esc(x.r.enrollment_id)+'">'+esc(x.r.full_name)+'</a></td><td class="nowrap">'+esc(x.r.class_name)+'</td><td>'+(x.issues.length?x.issues.map(i=>'<span class="pill warn" style="margin:1px">'+esc(i)+'</span>').join(' '):'<span class="pill good">Ready</span>')+'</td></tr>').join('')+'</tbody></table></div>'+(bad.length>200&&portalState.show==='issues'?'<p class="muted small" style="margin-top:8px">Showing the first 200. Pick a class to narrow the list. The download has everyone.</p>':''):'<p class="muted">Nothing to fix here. All students are ready.</p>'})()+'</div>';
+  $('#pc').onchange=e=>{portalState.cls=e.target.value;vPortal(el,rows)};
+  $('#ps').onchange=e=>{portalState.show=e.target.value;vPortal(el,rows)};
+  $$('#docbox tr.click').forEach(tr=>tr.addEventListener('click',e=>{if(e.target.tagName!=='A')location.hash='#/student/'+tr.dataset.e}));
+  const dmy=d=>d?d.split('-').reverse().join('/'):'';
+  const dl=(readyOnly)=>{
+    if(typeof XLSX==='undefined'){toast('The spreadsheet writer could not load. Reload and try again.',true);return}
+    const use=(readyOnly?scope.filter(x=>!x.issues.length):scope).slice().sort((a,b)=>(a.r.sort_order-b.r.sort_order)||String(a.r.full_name).localeCompare(b.r.full_name));
+    const data=use.map(x=>({'Admission no':x.r.admission_no,'Student name':x.st.full_name,Class:x.r.class_name,Gender:x.st.gender?x.st.gender[0].toUpperCase()+x.st.gender.slice(1):'','Date of birth (DD/MM/YYYY)':dmy(x.st.dob),'Father name':x.st.father_name||'','Mother name':x.st.mother_name||'','PEN':dig(x.st.pen),'APAAR ID':dig(x.st.apaar_id),'Samagra ID':dig(x.st.samagra_id),'Family ID':dig(x.st.family_id),'Guardian mobile':dig(x.st.guardian_mobile).slice(-10),Address:x.st.address||'','Admission date':dmy(x.st.admission_date),'Problems':x.issues.join('; ')}));
+    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(data.length?data:[{}]),'Students');
+    if(!readyOnly){const iss=scope.filter(x=>x.issues.length).map(x=>({'Admission no':x.r.admission_no,'Student name':x.r.full_name,Class:x.r.class_name,Problems:x.issues.join('; ')}));XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(iss.length?iss:[{Note:'No problems'}]),'To fix')}
+    XLSX.writeFile(wb,'AlKhair_portal_export_'+(cls==='all'?'all-classes':cls.replace(/\s+/g,''))+(readyOnly?'_ready':'')+'_'+today()+'.xlsx')};
+  $('#px').onclick=()=>dl(false);$('#pxo').onclick=()=>dl(true);
+}
+
 async function vDocuments(el,_a,emb){
   const [rows,pm]=await Promise.all([
     all((a,b)=>sb.from('v_student_id_status').select('*').order('sort_order').order('full_name').range(a,b)),

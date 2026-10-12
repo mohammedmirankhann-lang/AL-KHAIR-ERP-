@@ -71,3 +71,6 @@ One system and one database. The sign-in decides what each person sees.
 
 ## Owner and academics
 Marks, subjects, timetable and daily attendance are managed in the Coordinator workspace (and by teachers). The owner's **Academic reports** tab is read-only: Overview (one card per class: class teacher, marks entered %, average score, 30-day attendance), Marks progress, Results, Attendance and Report cards. The owner can still open the Coordinator workspace from the header switcher.
+
+## Portal export (UDISE+ / Education Portal 3.0)
+Students > Portal export checks every student against portal rules (PEN 11 digits, APAAR 12, Samagra ID 9, family ID 8, DOB, gender, father name, 10-digit mobile; PEN and APAAR not required for Nursery) and also flags IDs shared by two students. Download gives an Excel of all students (with a "To fix" sheet) or only the ready students. There is no API link to the government portals; the file is uploaded or keyed in by the office. Adjust the column order once the SDMS bulk template is available.
