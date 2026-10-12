@@ -446,25 +446,46 @@ async function vStudents(el){
   const [rows,miss]=await Promise.all([summaryRows(),all((a,b)=>sb.from('v_student_missing_documents').select('student_id').range(a,b))]);
   const missCount={};miss.forEach(m=>{missCount[m.student_id]=(missCount[m.student_id]||0)+1});
   const idr=await all((a,b)=>sb.from('v_student_id_status').select('student_id,has_pen,has_apaar,has_aadhaar,has_samagra,req_pen,req_apaar,req_aadhaar,req_samagra').range(a,b));idr.forEach(r=>{const n=IDS.filter(i=>idMiss(r,i[0])).length;if(n)missCount[r.student_id]=(missCount[r.student_id]||0)+n});
-  el.innerHTML=head('Students','Session '+S.year.label,'<button class="btn" id="addStu">Add student</button>')+
-   '<div class="toolbar"><input class="input" id="sq" placeholder="Search name or admission no" aria-label="Search" value="'+esc(stuState.q)+'">'+
-   '<select class="input" id="sc" aria-label="Class"><option value="all">All classes</option>'+S.classes.map(c=>'<option value="'+esc(c.name)+'"'+(stuState.cls===c.name?' selected':'')+'>'+esc(c.name)+'</option>').join('')+'</select>'+
-   '<select class="input" id="sf" aria-label="Filter">'+[['all','Everyone'],['due','Has fee dues'],['paid','Fully paid'],['nofee','No fee set'],['docs','Documents missing']].map(o=>'<option value="'+o[0]+'"'+(stuState.flt===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select><span class="muted small" id="scount"></span></div><div id="stbl"></div>';
+  const order=S.classes.map(c=>c.name),byCls={};
+  rows.forEach(r=>{(byCls[r.class_name]=byCls[r.class_name]||[]).push(r)});
+  Object.values(byCls).forEach(a=>a.sort((x,y)=>String(x.full_name).localeCompare(String(y.full_name))));
+  const clsList=order.filter(n=>byCls[n]).concat(Object.keys(byCls).filter(n=>!order.includes(n)));
+  const agg=rs=>{const net=rs.reduce((t,r)=>t+num(r.gross_fee)+num(r.previous_dues)-num(r.discount),0),paid=rs.reduce((t,r)=>t+num(r.paid),0),bal=rs.reduce((t,r)=>t+Math.max(0,num(r.balance)),0),dm=rs.filter(r=>missCount[r.student_id]).length;return{n:rs.length,net,paid,bal,dm,pct:net>0?Math.min(100,Math.round(paid/net*100)):0,due:rs.filter(r=>num(r.balance)>0).length}};
+  const bar=(pct)=>'<div style="height:8px;border-radius:99px;background:var(--surface2);overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+(pct>=75?'var(--good)':pct>=40?'var(--warn)':'var(--bad)')+'"></div></div>';
+  el.innerHTML=head('Students','Session '+S.year.label+' · '+rows.length+' students in '+clsList.length+' classes','<button class="btn" id="addStu">Add student</button>')+
+   '<div class="toolbar" style="margin-bottom:10px"><input class="input" id="sq" placeholder="Search name or admission no, across all classes" aria-label="Search" value="'+esc(stuState.q)+'">'+
+   '<select class="input" id="sf" aria-label="Filter">'+[['all','Everyone'],['due','Has fee dues'],['paid','Fully paid'],['nofee','No fee set'],['docs','Documents missing']].map(o=>'<option value="'+o[0]+'"'+(stuState.flt===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select><span class="muted small" id="scount"></span></div>'+
+   '<div id="chips" role="group" aria-label="Class" style="display:flex;gap:6px;overflow-x:auto;padding:2px 0 12px;margin-bottom:2px"></div><div id="stbl"></div>';
+  const trs=(list,showCls)=>list.map(r=>{const st=payStatus(r),mc=missCount[r.student_id]||0;return'<tr class="click" data-e="'+esc(r.enrollment_id)+'"><td class="nowrap">'+esc(r.admission_no)+'</td><td><a href="#/student/'+esc(r.enrollment_id)+'">'+esc(r.full_name)+'</a></td>'+(showCls?'<td class="nowrap">'+esc(r.class_name)+'</td>':'')+'<td class="r">'+inr(num(r.gross_fee)+num(r.previous_dues))+'</td><td class="r">'+(num(r.discount)?inr(r.discount):'<span class="muted">-</span>')+'</td><td class="r">'+inr(r.paid)+'</td><td class="r"><b>'+inr(Math.max(0,num(r.balance)))+'</b> <span class="pill '+st[1]+'">'+st[0]+'</span></td><td>'+(mc?'<span class="pill warn">'+mc+' missing</span>':'<span class="pill good">Complete</span>')+'</td></tr>'}).join('');
+  const tbl=(list,showCls)=>'<div class="tablewrap"><table><thead><tr><th>Adm no</th><th>Name</th>'+(showCls?'<th>Class</th>':'')+'<th class="r">Fee due</th><th class="r">Discount</th><th class="r">Paid</th><th class="r">Balance</th><th>Documents</th></tr></thead><tbody>'+trs(list,showCls)+'</tbody></table></div>';
   function paint(){
-    const t=stuState.q.trim().toLowerCase();
-    const list=rows.filter(r=>(stuState.cls==='all'||r.class_name===stuState.cls)&&(!t||(r.full_name+' '+r.admission_no).toLowerCase().includes(t))&&
-      (stuState.flt==='all'||(stuState.flt==='due'&&num(r.balance)>0)||(stuState.flt==='paid'&&num(r.balance)<=0&&num(r.gross_fee)>0)||(stuState.flt==='nofee'&&num(r.gross_fee)===0)||(stuState.flt==='docs'&&missCount[r.student_id])));
-    $('#scount').textContent=list.length+' students';
-    if(!list.length){$('#stbl').innerHTML='<div class="card empty">'+(rows.length?'No students match.':'No students yet. Use Add student or Import.')+'</div>';return}
-    const show=list.slice(0,150);
-    $('#stbl').innerHTML='<div class="tablewrap"><table><thead><tr><th>Adm no</th><th>Name</th><th>Class</th><th class="r">Fee due</th><th class="r">Discount</th><th class="r">Paid</th><th class="r">Balance</th><th>Documents</th></tr></thead><tbody>'+
-     show.map(r=>{const st=payStatus(r),mc=missCount[r.student_id]||0;return'<tr class="click" data-e="'+esc(r.enrollment_id)+'"><td class="nowrap">'+esc(r.admission_no)+'</td><td><a href="#/student/'+esc(r.enrollment_id)+'">'+esc(r.full_name)+'</a></td><td class="nowrap">'+esc(r.class_name)+'</td><td class="r">'+inr(num(r.gross_fee)+num(r.previous_dues))+'</td><td class="r">'+(num(r.discount)?inr(r.discount):'<span class="muted">-</span>')+'</td><td class="r">'+inr(r.paid)+'</td><td class="r"><b>'+inr(Math.max(0,num(r.balance)))+'</b> <span class="pill '+st[1]+'">'+st[0]+'</span></td><td>'+(mc?'<span class="pill warn">'+mc+' missing</span>':'<span class="pill good">Complete</span>')+'</td></tr>'}).join('')+'</tbody></table></div>'+
-     (list.length>show.length?'<p class="muted small" style="margin-top:8px">Showing the first 150 of '+list.length+'. Search or pick a class to narrow the list.</p>':'');
+    const t=stuState.q.trim().toLowerCase(),filtering=!!t||stuState.flt!=='all';
+    const pass=r=>(!t||(r.full_name+' '+r.admission_no).toLowerCase().includes(t))&&(stuState.flt==='all'||(stuState.flt==='due'&&num(r.balance)>0)||(stuState.flt==='paid'&&num(r.balance)<=0&&num(r.gross_fee)>0)||(stuState.flt==='nofee'&&num(r.gross_fee)===0)||(stuState.flt==='docs'&&missCount[r.student_id]));
+    $('#chips').innerHTML=[['all','All classes',rows.length]].concat(clsList.map(n=>[n,n,byCls[n].length])).map(c=>{const on=stuState.cls===c[0];return'<button type="button" data-c="'+esc(c[0])+'" aria-pressed="'+on+'" class="btn sm '+(on?'':'ghost')+'" style="white-space:nowrap;flex:none">'+esc(c[1])+' <span style="opacity:.7">'+c[2]+'</span></button>'}).join('');
+    $$('#chips button').forEach(b=>b.onclick=()=>{stuState.cls=b.dataset.c;paint()});
+    let h='';
+    if(stuState.cls!=='all'&&byCls[stuState.cls]){
+      const all_=byCls[stuState.cls],list=all_.filter(pass),g=agg(all_);
+      $('#scount').textContent=list.length+' of '+all_.length+' students';
+      h='<div class="kpis">'+kpi('Students',String(g.n),g.due+' with fee dues')+kpi('Fee to collect',inr(g.net),'after discounts')+kpi('Collected',inr(g.paid),g.pct+'% of fee')+kpi('Balance',inr(g.bal),g.dm+' students with documents missing')+'</div><div style="margin:4px 0 14px">'+bar(g.pct)+'</div>'+
+        (list.length?'<div class="card">'+tbl(list,false)+'</div>':'<div class="card empty">No students match in this class.</div>');
+    }else if(filtering){
+      let n=0;
+      clsList.forEach(cn=>{const list=byCls[cn].filter(pass);if(!list.length)return;n+=list.length;
+        h+='<div class="card" style="margin-bottom:12px"><div class="card-head"><h2>'+esc(cn)+' <span class="muted small" style="font-weight:500">'+list.length+' of '+byCls[cn].length+'</span></h2><button type="button" class="btn ghost sm" data-open="'+esc(cn)+'">Open class</button></div>'+tbl(list,false)+'</div>'});
+      $('#scount').textContent=n+' students';
+      if(!n)h='<div class="card empty">No students match.</div>';
+    }else{
+      const g=agg(rows);$('#scount').textContent='';
+      h='<div class="kpis">'+kpi('Students',String(g.n),clsList.length+' classes')+kpi('Fee to collect',inr(g.net),'after discounts')+kpi('Collected',inr(g.paid),g.pct+'% of fee')+kpi('Balance',inr(g.bal),g.due+' students with dues')+'</div>'+
+        (rows.length?'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:14px">'+clsList.map(cn=>{const a=agg(byCls[cn]);return'<button type="button" class="card" data-open="'+esc(cn)+'" style="text-align:left;cursor:pointer;display:grid;gap:8px;font:inherit;color:inherit"><div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:17px">'+esc(cn)+'</b><span class="muted small">'+a.n+' students</span></div>'+bar(a.pct)+'<div class="small"><b>'+a.pct+'%</b> collected · due '+inr(a.bal)+'</div><div>'+(a.dm?'<span class="pill warn">'+a.dm+' docs missing</span>':'<span class="pill good">Documents complete</span>')+'</div></button>'}).join('')+'</div>':'<div class="card empty">No students yet. Use Add student or Import.</div>');
+    }
+    $('#stbl').innerHTML=h;
+    $$('#stbl [data-open]').forEach(b=>b.onclick=()=>{stuState.cls=b.dataset.open;paint();window.scrollTo(0,0)});
     $$('#stbl tr.click').forEach(tr=>tr.addEventListener('click',e=>{if(e.target.tagName!=='A')location.hash='#/student/'+tr.dataset.e}));
   }
   paint();
   $('#sq').addEventListener('input',e=>{stuState.q=e.target.value;paint()});
-  $('#sc').addEventListener('change',e=>{stuState.cls=e.target.value;paint()});
   $('#sf').addEventListener('change',e=>{stuState.flt=e.target.value;paint()});
   $('#addStu').onclick=()=>addStudentModal();
 }
