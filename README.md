@@ -65,6 +65,6 @@ One system and one database. The sign-in decides what each person sees.
 * Migration `20261010000017_roles_workspaces.sql`; edge function `staff-login` accepts `role`.
 
 ## Document scans
-* Student page > Documents: **Upload** a photo or PDF per document (compressed on the phone, max 6 MB), **View**, **Replace**, **Mark checked**. A document counts as received only when a file is attached, so missing documents drive the Dashboard and Documents alerts automatically.
+* Students > class > student > Documents: **Upload** a photo or PDF per document (compressed on the phone, max 6 MB), **View**, **Replace**, **Mark checked**. A document counts as received only when a file is attached, so missing documents drive the Dashboard and Documents alerts automatically.
 * Files sit in the private `student-docs` bucket. Only the owner and Accounts and Administration can open them.
 * Aadhaar card: after upload it is read in the browser (Tesseract, nothing leaves the device). The number must pass the Verhoeff checksum and a person must tick that it was compared with the original. Only the last 4 digits are stored. Name and date of birth on the card are compared with the student record as hints.

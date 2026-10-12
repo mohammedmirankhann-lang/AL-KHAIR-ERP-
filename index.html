@@ -375,11 +375,11 @@ const classByName=n=>S.classes.find(c=>c.name===n);
 const summaryRows=()=>all((a,b)=>sb.from('v_student_fee_summary').select('*').eq('academic_year_id',S.year.id).order('sort_order').order('full_name').range(a,b));
 
 /* ---------- routing ---------- */
-const NAV=[['dashboard','Dashboard'],['students','Students'],['documents','Documents'],['staff','Staff'],['academics','Academics'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['finance','Finance'],['trends','Trends'],['import','Import']];
+const NAV=[['dashboard','Dashboard'],['students','Students'],['staff','Staff'],['academics','Academics'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['finance','Finance'],['trends','Trends'],['import','Import']];
 const ROLE_LABEL={owner:'Owner',accountant:'Accounts and Administration',coordinator:'Coordinator',teacher:'Teacher'};
 const NAV_BY_ROLE={
   owner:NAV,
-  accountant:[['dashboard','Dashboard'],['students','Students'],['documents','Documents'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['import','Import']],
+  accountant:[['dashboard','Dashboard'],['students','Students'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['import','Import']],
   coordinator:[['home','Home'],['academics','Classes'],['staff','Teachers']]};
 function currentRoute(){const h=location.hash.replace(/^#\/?/,'').split('/');return{name:h[0]||'dashboard',arg:h[1]?decodeURIComponent(h[1]):null}}
 async function route(){
@@ -387,6 +387,7 @@ async function route(){
   const r=currentRoute(),view=$('#view');
   if(S.user.user_metadata&&S.user.user_metadata.temp_password){$('#nav').innerHTML='';await vSetPassword(view);return}
   if(S.profile&&S.profile.role==='teacher'){const tn=[['me','My attendance'],['attendance','Class attendance'],['marks','Marks'],['traits','Report details']],tr=(r.name==='dashboard'?'me':r.name);$('#nav').innerHTML=tn.map(n=>'<a href="#/'+n[0]+'"'+(tr===n[0]?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');view.innerHTML='<p class="muted">Loading…</p>';const tf={attendance:vTAttendance,marks:vTMarks,traits:vTTraits}[tr]||vMyAttendance;try{await tf(view)}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted">'+esc(errMsg(e))+'</p></div>'}return}
+  if(r.name==='documents'){stuState.view='docs';r.name='students';location.hash='#/students'}
   const role=S.profile&&S.profile.role==='owner'?(S.mode||'owner'):((S.profile&&S.profile.role)||'owner'),nav=NAV_BY_ROLE[role]||NAV;
   const okNames=nav.map(n=>n[0]).concat(role==='coordinator'?[]:['student','olddues']);
   if(!okNames.includes(r.name)){r.name=nav[0][0];r.arg=null}
@@ -441,7 +442,7 @@ async function vDashboard(el){
 /* =================================================================
    STUDENTS
 ================================================================= */
-let stuState={q:'',cls:'all',flt:'all'};
+let stuState={q:'',cls:'all',flt:'all',view:'classes'};
 async function vStudents(el){
   const [rows,miss]=await Promise.all([summaryRows(),all((a,b)=>sb.from('v_student_missing_documents').select('student_id').range(a,b))]);
   const missCount={};miss.forEach(m=>{missCount[m.student_id]=(missCount[m.student_id]||0)+1});
@@ -454,7 +455,12 @@ async function vStudents(el){
   const clsList=order.filter(n=>byCls[n]).concat(Object.keys(byCls).filter(n=>!order.includes(n)));
   const agg=rs=>{const net=rs.reduce((t,r)=>t+num(r.gross_fee)+num(r.previous_dues)-num(r.discount),0),paid=rs.reduce((t,r)=>t+num(r.paid),0),bal=rs.reduce((t,r)=>t+Math.max(0,num(r.balance)),0),dm=rs.filter(r=>missCount[r.student_id]).length;return{n:rs.length,net,paid,bal,dm,pct:net>0?Math.min(100,Math.round(paid/net*100)):0,due:rs.filter(r=>num(r.balance)>0).length}};
   const bar=(pct)=>'<div style="height:8px;border-radius:99px;background:var(--surface2);overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+(pct>=75?'var(--good)':pct>=40?'var(--warn)':'var(--bad)')+'"></div></div>';
-  el.innerHTML=head('Students','Session '+S.year.label+' · '+rows.length+' students in '+clsList.length+' classes','<button class="btn" id="addStu">Add student</button>')+
+  const segH='<div class="seg" role="group" aria-label="Students view" style="justify-self:start;margin-bottom:12px">'+[['classes','Classes'],['docs','Document tracker']].map(t=>'<button type="button" data-v="'+t[0]+'" aria-pressed="'+(stuState.view===t[0])+'">'+t[1]+'</button>').join('')+'</div>';
+  const segBind=()=>$$('.seg button[data-v]').forEach(b=>b.onclick=()=>{stuState.view=b.dataset.v;vStudents(el)});
+  if(stuState.view==='docs'){
+    el.innerHTML=head('Students','Session '+S.year.label+' · '+rows.length+' students in '+clsList.length+' classes','<button class="btn" id="addStu">Add student</button>')+segH+'<div id="docbox"></div>';
+    segBind();$('#addStu').onclick=()=>addStudentModal();await vDocuments($('#docbox'),null,true);return}
+  el.innerHTML=head('Students','Session '+S.year.label+' · '+rows.length+' students in '+clsList.length+' classes','<button class="btn" id="addStu">Add student</button>')+segH+
    '<div class="toolbar" style="margin-bottom:10px"><input class="input" id="sq" placeholder="Search name or admission no, across all classes" aria-label="Search" value="'+esc(stuState.q)+'">'+
    '<select class="input" id="sf" aria-label="Filter">'+[['all','Everyone'],['due','Has fee dues'],['paid','Fully paid'],['nofee','No fee set'],['docs','Documents missing']].map(o=>'<option value="'+o[0]+'"'+(stuState.flt===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select><span class="muted small" id="scount"></span></div>'+
    '<div id="chips" role="group" aria-label="Class" style="display:flex;gap:6px;overflow-x:auto;padding:2px 0 12px;margin-bottom:2px"></div><div id="stbl"></div>';
@@ -487,7 +493,7 @@ async function vStudents(el){
     $$('#stbl [data-open]').forEach(b=>b.onclick=()=>{stuState.cls=b.dataset.open;paint();window.scrollTo(0,0)});
     $$('#stbl tr.click').forEach(tr=>tr.addEventListener('click',e=>{if(e.target.tagName!=='A')location.hash='#/student/'+tr.dataset.e}));
   }
-  paint();
+  segBind();paint();
   $('#sq').addEventListener('input',e=>{stuState.q=e.target.value;paint()});
   $('#sf').addEventListener('change',e=>{stuState.flt=e.target.value;paint()});
   $('#addStu').onclick=()=>addStudentModal();
@@ -526,7 +532,7 @@ function addStudentModal(){
 const IDS=[['has_pen','PEN'],['has_apaar','APAAR'],['has_aadhaar','Aadhaar'],['has_samagra','Samagra']];
 const idMiss=(r,k)=>r['req_'+k.slice(4)]!==false&&!r[k];
 let docState={q:'',cls:'all',miss:'any'};
-async function vDocuments(el){
+async function vDocuments(el,_a,emb){
   const [rows,pm]=await Promise.all([
     all((a,b)=>sb.from('v_student_id_status').select('*').order('sort_order').order('full_name').range(a,b)),
     all((a,b)=>sb.from('v_student_missing_documents').select('student_id').range(a,b))]);
@@ -535,7 +541,7 @@ async function vDocuments(el){
   const mark=(r,k)=>r['req_'+k.slice(4)]===false?'<span class="pill neutral" title="Not issued yet at this class">N/A</span>':(r[k]?'<span class="pill good" title="Submitted">&#10003;</span>':'<span class="pill bad" title="Missing">Missing</span>');
   const byClass=S.classes.map(c=>{const rs=rows.filter(r=>r.class_name===c.name);return{c:c.name,n:rs.length,rs}}).filter(x=>x.n);
   const cell=(rs,k)=>{const m=rs.filter(r=>idMiss(r,k)).length;return'<td class="r">'+(!rs.some(r=>r['req_'+k.slice(4)]!==false)?'<span class="pill neutral">N/A</span>':m?'<b style="color:var(--bad)">'+m+'</b> <span class="muted small">missing</span>':'<span class="pill good">All</span>')+'</td>'};
-  el.innerHTML=head('Documents','Session '+S.year.label+' · PEN, APAAR, Aadhaar and Samagra ID','<button class="btn ghost" id="dx">Download list</button>')+
+  el.innerHTML=(emb?'<div class="toolbar" style="margin-bottom:10px;justify-content:space-between"><span class="muted small">PEN, APAAR, Aadhaar and Samagra ID, and who is still missing them</span><button class="btn ghost" id="dx">Download list</button></div>':head('Documents','Session '+S.year.label+' · PEN, APAAR, Aadhaar and Samagra ID','<button class="btn ghost" id="dx">Download list</button>'))+
    '<div class="kpis">'+IDS.map(i=>kpi(i[1],have(i[0])+' of '+need(i[0]),(need(i[0])-have(i[0]))+' missing'+(need(i[0])<total?' · Nursery not counted':''))).join('')+'</div>'+
    '<div class="card"><h2 style="margin-bottom:10px">Class-wise: who is still missing</h2><div class="tablewrap"><table><thead><tr><th>Class</th><th class="r">Students</th>'+IDS.map(i=>'<th class="r">'+i[1]+'</th>').join('')+'</tr></thead><tbody>'+
    byClass.map(x=>'<tr><td class="nowrap">'+esc(x.c)+'</td><td class="r">'+x.n+'</td>'+IDS.map(i=>cell(x.rs,i[0])).join('')+'</tr>').join('')+
@@ -661,7 +667,7 @@ async function vStudent(el,enrId){
      (has?'<button class="btn ghost sm" data-doc="view" data-t="'+esc(d.id)+'">View</button><button class="btn ghost sm" data-doc="upload" data-t="'+esc(d.id)+'">Replace</button>'+(x.checked?'':'<button class="btn ghost sm" data-doc="check" data-t="'+esc(d.id)+'">Mark checked</button>'):(na?'<button class="btn ghost sm" data-doc="clear" data-t="'+esc(d.id)+'">Clear</button>':'<button class="btn sm" data-doc="upload" data-t="'+esc(d.id)+'">Upload</button><button class="btn ghost sm" data-doc="not_applicable" data-t="'+esc(d.id)+'">N/A</button>'))+'</div></li>'}).join('')+'</ul></div></div>'+
    '<div class="card"><h2 style="margin-bottom:10px">Payments</h2>'+(pay.length?'<div class="tablewrap"><table><thead><tr><th>Receipt</th><th>Date</th><th>Mode</th><th class="r">Amount</th><th>Status</th><th></th></tr></thead><tbody>'+pay.map(p=>'<tr><td class="nowrap">'+esc(p.receipt_no)+'</td><td class="nowrap">'+fmtDate(p.paid_on)+'</td><td>'+esc(p.mode)+(p.reference?' <span class="muted small">'+esc(p.reference)+'</span>':'')+'</td><td class="r">'+inr(p.amount)+'</td><td><span class="pill '+(p.status==='posted'?'good':'neutral')+'">'+(p.status==='posted'?'Paid':'Reversed')+'</span></td><td class="r nowrap"><button class="btn ghost sm" data-rc="'+esc(p.id)+'">Receipt</button> '+(p.status==='posted'?'<button class="btn danger sm" data-revpay="'+esc(p.id)+'">Reverse</button>':'')+'</td></tr>').join('')+'</tbody></table></div>':'<p class="muted">No payments yet.</p>')+'</div>';
   const again=()=>route();
-  $$('[data-bc]').forEach(a=>a.addEventListener('click',()=>{stuState.cls=a.dataset.bc==='cls'?cls.name:'all'}));
+  $$('[data-bc]').forEach(a=>a.addEventListener('click',()=>{stuState.cls=a.dataset.bc==='cls'?cls.name:'all';if(a.dataset.bc==='cls')stuState.view='classes'}));
   $('#editStu').onclick=()=>formModal('Edit details',studentFields(stu),'Save',async fd=>{
     const p=studentPayload(fd);if(!p.admission_no||!p.full_name)throw new Error('Admission no and name are required');
     await q(sb.from('students').update(p).eq('id',stu.id));closeModal();toast('Saved');again();},{wide:true});
