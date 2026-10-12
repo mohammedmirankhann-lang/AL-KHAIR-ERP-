@@ -375,7 +375,7 @@ const classByName=n=>S.classes.find(c=>c.name===n);
 const summaryRows=()=>all((a,b)=>sb.from('v_student_fee_summary').select('*').eq('academic_year_id',S.year.id).order('sort_order').order('full_name').range(a,b));
 
 /* ---------- routing ---------- */
-const NAV=[['dashboard','Dashboard'],['students','Students'],['staff','Staff'],['academics','Academics'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['finance','Finance'],['trends','Trends'],['import','Import']];
+const NAV=[['dashboard','Dashboard'],['students','Students'],['staff','Staff'],['academics','Academic reports'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['finance','Finance'],['trends','Trends'],['import','Import']];
 const ROLE_LABEL={owner:'Owner',accountant:'Accounts and Administration',coordinator:'Coordinator',teacher:'Teacher'};
 const NAV_BY_ROLE={
   owner:NAV,
@@ -1482,11 +1482,13 @@ async function vAcademics(el){
   const B=await acBase();
   if(!acSel.cls)acSel.cls=S.classes[0].id;
   if(!acSel.exam&&B.exams[0])acSel.exam=B.exams[0].id;
-  el.innerHTML=head('Academics','Session '+S.year.label+' · '+B.exams.map(e=>e.short_name).join(', '))+
-   '<div class="seg" role="group" style="justify-self:start">'+[['marks','Enter marks'],['res','Results'],['att','Attendance'],['prog','Progress'],['rc','Report cards'],['set','Setup']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(acTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="abody" style="margin-top:14px;min-width:0"></div>';
+  const rep=wsRole()==='owner',tabs=rep?[['ov','Overview'],['prog','Marks progress'],['res','Results'],['att','Attendance'],['rc','Report cards']]:[['marks','Enter marks'],['res','Results'],['att','Attendance'],['prog','Progress'],['rc','Report cards'],['set','Setup']];
+  if(!tabs.some(t=>t[0]===acTab))acTab=tabs[0][0];
+  el.innerHTML=head(rep?'Academic reports':'Academics','Session '+S.year.label+' · '+B.exams.map(e=>e.short_name).join(', ')+(rep?' · marks and attendance are entered by the coordinator and teachers':''))+
+   '<div class="seg" role="group" style="justify-self:start">'+tabs.map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(acTab===t[0])+'">'+t[1]+'</button>').join('')+'</div><div id="abody" style="margin-top:14px;min-width:0"></div>';
   $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{acTab=b.dataset.t;vAcademics(el)});
   const box=$('#abody');
-  try{if(acTab==='marks')await acMarks(box,B);else if(acTab==='res')await acResults(box,B);else if(acTab==='att')await acAttendance(box,B);else if(acTab==='prog')await acProgress(box,B);else if(acTab==='rc')await acReport(box,B);else await acSetup(box,B)}catch(e){box.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}
+  try{if(acTab==='ov')await acOverview(box,B);else if(acTab==='marks')await acMarks(box,B);else if(acTab==='res')await acResults(box,B);else if(acTab==='att')await acAttendance(box,B);else if(acTab==='prog')await acProgress(box,B);else if(acTab==='rc')await acReport(box,B);else await acSetup(box,B)}catch(e){box.innerHTML='<p class="err">'+esc(errMsg(e))+'</p>'}
 }
 const acPicker=(B,withSubj)=>'<div class="row2" style="align-items:end">'+sel('acC','Class',S.classes.map(c=>[c.id,c.name]),acSel.cls)+sel('acE','Exam',B.exams.map(e=>[e.id,e.name]),acSel.exam)+'</div>'+(withSubj?sel('acS','Subject',B.subjOf(acSel.cls).map(x=>[x.id,x.name]),acSel.subj):'');
 function acBind(el,withSubj){
@@ -1497,6 +1499,33 @@ function acBind(el,withSubj){
 async function acEnrolled(){
   const en=await q(sb.from('enrollments').select('id,roll_no,students(full_name,admission_no)').eq('academic_year_id',S.year.id).eq('class_id',acSel.cls));
   return en.sort((a,b)=>(a.roll_no||999)-(b.roll_no||999)||a.students.full_name.localeCompare(b.students.full_name));
+}
+
+/* ---------- Owner view: one line per class, nothing to edit ---------- */
+async function acOverview(box,B){
+  const ex=B.exams.find(e=>e.id===acSel.exam)||B.exams[0];
+  if(!ex){box.innerHTML='<p class="muted">No exams set up yet. The coordinator can add them.</p>';return}
+  const d30=new Date(Date.now()-29*86400000),from=d30.getFullYear()+'-'+String(d30.getMonth()+1).padStart(2,'0')+'-'+String(d30.getDate()).padStart(2,'0');
+  const [en,mk,at,asg,stf]=await Promise.all([
+    all((a,b)=>sb.from('enrollments').select('id,class_id').eq('academic_year_id',S.year.id).range(a,b)),
+    all((a,b)=>sb.from('marks').select('enrollment_id,subject_id,marks,max_marks,absent').eq('exam_id',ex.id).range(a,b)),
+    all((a,b)=>sb.from('student_attendance').select('enrollment_id,status').gte('att_date',from).range(a,b)),
+    q(sb.from('teacher_assignments').select('class_id,staff_id').eq('is_class_teacher',true).eq('academic_year_id',S.year.id)),
+    q(sb.from('staff').select('id,full_name'))]);
+  const sNm=Object.fromEntries(stf.map(x=>[x.id,x.full_name])),clsOf=Object.fromEntries(en.map(e=>[e.id,e.class_id])),ct={};asg.forEach(a=>{ct[a.class_id]=sNm[a.staff_id]});
+  const rows=S.classes.map(c=>{
+    const es=en.filter(e=>e.class_id===c.id),n=es.length,subs=B.subjOf(c.id).length,cells=n*subs,ms=mk.filter(m=>clsOf[m.enrollment_id]===c.id);
+    const got=ms.length,graded=ms.filter(m=>!m.absent&&m.marks!=null&&num(m.max_marks)>0),avg=graded.length?graded.reduce((t,m)=>t+num(m.marks)/num(m.max_marks),0)/graded.length*100:null;
+    const as=at.filter(a=>clsOf[a.enrollment_id]===c.id),pres=as.filter(a=>a.status==='present'||a.status==='late').length;
+    return{c,n,subs,pct:cells?Math.min(100,Math.round(got/cells*100)):0,avg,att:as.length?Math.round(pres/as.length*100):null,ct:ct[c.id]}}).filter(r=>r.n);
+  const col=v=>v==null?'var(--muted)':v>=75?'var(--good)':v>=50?'var(--warn)':'var(--bad)';
+  box.innerHTML='<div class="row2" style="align-items:end">'+sel('acE','Exam',B.exams.map(e=>[e.id,e.name]),ex.id)+'</div>'+
+   '<div class="kpis" style="margin-top:12px">'+kpi('Classes',String(rows.length),rows.filter(r=>!r.ct).length+' without a class teacher')+kpi('Marks entered',Math.round(rows.reduce((t,r)=>t+r.pct,0)/(rows.length||1))+'%','average across classes, '+ex.short_name)+kpi('Attendance',(function(){const v=rows.filter(r=>r.att!=null);return v.length?Math.round(v.reduce((t,r)=>t+r.att,0)/v.length)+'%':'No data'})(),'student attendance, last 30 days')+'</div>'+
+   '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-top:14px">'+rows.map(r=>'<div class="card" style="display:grid;gap:8px"><div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:17px">'+esc(r.c.name)+'</b><span class="muted small">'+r.n+' students</span></div><div class="small">'+(r.ct?esc(r.ct):'<span class="pill warn">No class teacher</span>')+'</div>'+
+    '<div class="small">Marks entered <b>'+r.pct+'%</b></div><div style="height:8px;border-radius:99px;background:var(--surface2);overflow:hidden"><div style="height:100%;width:'+r.pct+'%;background:'+col(r.pct)+'"></div></div>'+
+    '<div class="small">Average score <b style="color:'+col(r.avg)+'">'+(r.avg==null?'-':Math.round(r.avg)+'%')+'</b> · Attendance <b style="color:'+col(r.att)+'">'+(r.att==null?'-':r.att+'%')+'</b></div></div>').join('')+'</div>'+
+   '<p class="muted small" style="margin-top:10px">Read-only. Marks entered = marks filled in for every student and subject of the class. Use the other tabs for subject-wise progress, results, daily attendance and report cards.</p>';
+  $('#acE').onchange=e=>{acSel.exam=e.target.value;vAcademics($('#view'))};
 }
 async function acMarks(box,B){
   const subs=B.subjOf(acSel.cls);

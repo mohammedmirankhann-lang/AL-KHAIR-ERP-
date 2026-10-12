@@ -68,3 +68,6 @@ One system and one database. The sign-in decides what each person sees.
 * Students > class > student > Documents: **Upload** a photo or PDF per document (compressed on the phone, max 6 MB), **View**, **Replace**, **Mark checked**. A document counts as received only when a file is attached, so missing documents drive the Dashboard and Documents alerts automatically.
 * Files sit in the private `student-docs` bucket. Only the owner and Accounts and Administration can open them.
 * Aadhaar card: after upload it is read in the browser (Tesseract, nothing leaves the device). The number must pass the Verhoeff checksum and a person must tick that it was compared with the original. Only the last 4 digits are stored. Name and date of birth on the card are compared with the student record as hints.
+
+## Owner and academics
+Marks, subjects, timetable and daily attendance are managed in the Coordinator workspace (and by teachers). The owner's **Academic reports** tab is read-only: Overview (one card per class: class teacher, marks entered %, average score, 30-day attendance), Marks progress, Results, Attendance and Report cards. The owner can still open the Coordinator workspace from the header switcher.
