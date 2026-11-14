@@ -74,3 +74,8 @@ Marks, subjects, timetable and daily attendance are managed in the Coordinator w
 
 ## Portal export (UDISE+ / Education Portal 3.0)
 Students > Portal export checks every student against portal rules (PEN 11 digits, APAAR 12, Samagra ID 9, family ID 8, DOB, gender, father name, 10-digit mobile; PEN and APAAR not required for Nursery) and also flags IDs shared by two students. Download gives an Excel of all students (with a "To fix" sheet) or only the ready students. There is no API link to the government portals; the file is uploaded or keyed in by the office. Adjust the column order once the SDMS bulk template is available.
+
+## Dashboard, Reminders and Reports (14 Nov 2026)
+* **Dashboard:** a "today" row (collected today, staff in school, documents pending, students with dues) and the usual totals; every card opens the matching screen. New Class-wise collection table (fee due, collected, outstanding, % collected); click a class to open its students.
+* **Reminders:** one message per parent (brothers and sisters with the same mobile are combined into one message), "Sent" marks per message (kept in this browser, with Hide sent and Clear sent marks), Send again.
+* **Reports** (owner and Accounts): choose class, fee status (dues, fully paid, no fee), document status (any missing or PEN, APAAR, Aadhaar, Samagra missing), search, and the columns; then Print, Excel or CSV. Read-only, no database change.

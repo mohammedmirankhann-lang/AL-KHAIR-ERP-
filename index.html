@@ -96,6 +96,17 @@ textarea.input{min-height:72px;resize:vertical}
 .kpi{background:var(--surface);border:1px solid var(--line);border-top:3px solid var(--gold);border-radius:8px;padding:12px 16px;display:grid;gap:3px;min-width:0}
 .kpi .v{font-size:27px;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums}
 .kpi .s{font-size:12.5px;color:var(--muted)}
+a.kpi{text-decoration:none;color:inherit}
+a.kpi:hover{border-color:var(--gold);box-shadow:0 1px 6px rgba(0,0,0,.08)}
+.kpi.today{border-top-color:var(--navy)}
+.cls-table td.pc{min-width:130px}
+.pmini{height:8px;background:var(--surface2);border-radius:99px;overflow:hidden;min-width:70px}
+.pmini>i{display:block;height:100%;background:var(--good)}
+.pmini.low>i{background:var(--bad)} .pmini.mid>i{background:var(--c-fc)}
+.alerts a.pill{text-decoration:none}
+.sentrow td{opacity:.55}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chk{display:flex;gap:6px;align-items:center;font-size:13px}
 .grid2{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:16px}
 .grid2e{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
 .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
@@ -375,11 +386,11 @@ const classByName=n=>S.classes.find(c=>c.name===n);
 const summaryRows=()=>all((a,b)=>sb.from('v_student_fee_summary').select('*').eq('academic_year_id',S.year.id).order('sort_order').order('full_name').range(a,b));
 
 /* ---------- routing ---------- */
-const NAV=[['dashboard','Dashboard'],['students','Students'],['staff','Staff'],['academics','Academic reports'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['finance','Finance'],['trends','Trends'],['import','Import']];
+const NAV=[['dashboard','Dashboard'],['students','Students'],['staff','Staff'],['academics','Academic reports'],['fees','Fees'],['reminders','Reminders'],['reports','Reports'],['accounts','Accounts'],['finance','Finance'],['trends','Trends'],['import','Import']];
 const ROLE_LABEL={owner:'Owner',accountant:'Accounts and Administration',coordinator:'Coordinator',teacher:'Teacher'};
 const NAV_BY_ROLE={
   owner:NAV,
-  accountant:[['dashboard','Dashboard'],['students','Students'],['fees','Fees'],['reminders','Reminders'],['accounts','Accounts'],['import','Import']],
+  accountant:[['dashboard','Dashboard'],['students','Students'],['fees','Fees'],['reminders','Reminders'],['reports','Reports'],['accounts','Accounts'],['import','Import']],
   coordinator:[['home','Home'],['academics','Classes'],['staff','Teachers']]};
 function currentRoute(){const h=location.hash.replace(/^#\/?/,'').split('/');return{name:h[0]||'dashboard',arg:h[1]?decodeURIComponent(h[1]):null}}
 async function route(){
@@ -392,14 +403,14 @@ async function route(){
   const okNames=nav.map(n=>n[0]).concat(role==='coordinator'?[]:['student','olddues']);
   if(!okNames.includes(r.name)){r.name=nav[0][0];r.arg=null}
   $('#nav').innerHTML=nav.map(n=>'<a href="#/'+n[0]+'"'+((r.name===n[0]||(r.name==='student'&&n[0]==='students'))?' aria-current="page"':'')+'>'+n[1]+'</a>').join('');
-  const fn={home:vCoordHome,dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,olddues:vOldDues,fees:vFees,accounts:vAccounts,finance:vFinance,trends:vTrends,import:vImport}[r.name]||vDashboard;
+  const fn={home:vCoordHome,dashboard:vDashboard,students:vStudents,student:vStudent,documents:vDocuments,staff:vStaff,academics:vAcademics,reminders:vReminders,reports:vReports,olddues:vOldDues,fees:vFees,accounts:vAccounts,finance:vFinance,trends:vTrends,import:vImport}[r.name]||vDashboard;
   view.innerHTML='<p class="muted">Loading…</p>';
   try{await fn(view,r.arg);}catch(e){console.error(e);view.innerHTML='<div class="card"><h2>Something went wrong</h2><p class="muted" style="margin-top:6px">'+esc(errMsg(e))+'</p><p style="margin-top:10px"><button class="btn" onclick="route()">Try again</button></p></div>'}
   window.scrollTo(0,0);
 }
 window.addEventListener('hashchange',route);
 const head=(title,sub,right)=>'<div class="pagehead"><div><h1>'+esc(title)+'</h1>'+(sub?'<p class="sub">'+esc(sub)+'</p>':'')+'</div>'+(right?'<div class="toolbar">'+right+'</div>':'')+'</div>';
-const kpi=(l,v,s)=>'<div class="kpi"><span class="eyebrow">'+esc(l)+'</span><span class="v">'+esc(v)+'</span><span class="s">'+esc(s||'')+'</span></div>';
+const kpi=(l,v,s,href,cls)=>{const in_='<span class="eyebrow">'+esc(l)+'</span><span class="v">'+esc(v)+'</span><span class="s">'+esc(s||'')+'</span>';return href?'<a class="kpi'+(cls?' '+cls:'')+'" href="'+href+'">'+in_+'</a>':'<div class="kpi'+(cls?' '+cls:'')+'">'+in_+'</div>'};
 function payStatus(r){const bal=num(r.balance),net=num(r.gross_fee)-num(r.discount)+num(r.previous_dues);
   if(net<=0&&num(r.gross_fee)===0)return['No fee set','neutral'];if(bal<=0)return['Paid','good'];return[num(r.paid)>0?'Part paid':'Due',num(r.paid)>0?'warn':'bad']}
 
@@ -413,30 +424,37 @@ async function vDashboard(el){
     all((a,b)=>sb.from('v_fee_collection_monthly').select('*').order('month').range(a,b)),
     rpc('fn_fee_subledger_check'),
     q(sb.from('payments').select('id,receipt_no,amount,paid_on,mode,status,enrollment_id').order('created_at',{ascending:false}).limit(8)),
-    Promise.resolve(null)]);
+    q(sb.from('payments').select('amount').eq('paid_on',today()).eq('status','posted')).catch(()=>[])]);
+  const todayPay=enr||[];let staffIn=null,staffTot=0;
   const rows=sum_,byEnr=Object.fromEntries(rows.map(r=>[r.enrollment_id,r]));
   const billed=sum(rows.map(r=>num(r.gross_fee)-num(r.discount)+num(r.previous_dues))),paid=sum(rows.map(r=>num(r.paid))),out=sum(rows.map(r=>Math.max(0,num(r.balance))));
   const series=monthlySeries(mon),F=makeForecast(series,6,{seasonal:true});
   const byClass=S.classes.map(c=>({l:c.name,v:sum(rows.filter(r=>r.class_name===c.name).map(r=>Math.max(0,num(r.balance))))})).filter(x=>x.v>0);
   const missStudents=new Set(miss.map(m=>m.student_id)).size,noFee=rows.filter(r=>num(r.gross_fee)===0).length,dueStudents=rows.filter(r=>num(r.balance)>0).length;
+  const clsRows=S.classes.map(c=>{const rs=rows.filter(r=>r.class_name===c.name),b=sum(rs.map(r=>num(r.gross_fee)-num(r.discount)+num(r.previous_dues))),pd=sum(rs.map(r=>num(r.paid)));return{n:c.name,st:rs.length,b,p:pd,o:sum(rs.map(r=>Math.max(0,num(r.balance)))),pc:b?Math.min(100,Math.round(pd/b*100)):0}}).filter(c=>c.st);
   const ck=(chk&&chk[0])||{difference:0},tied=Math.abs(num(ck.difference))<0.005;
   const alerts=[];
   if(!rows.length)alerts.push(['neutral','Start','No students yet. Add them one by one or use Import.']);
-  if(noFee)alerts.push(['warn','Fees',noFee+' students have no fee set. Set the class fee structure in Fees, then apply it.']);
-  if(dueStudents)alerts.push(['warn','Dues',dueStudents+' students have fee dues of '+inr(out)+' in total.']);
-  if(missStudents)alerts.push(['warn','Documents',missStudents+' students have documents missing.']);
+  if(noFee)alerts.push(['warn','Fees',noFee+' students have no fee set. Set the class fee structure in Fees, then apply it.','#/fees']);
+  if(dueStudents)alerts.push(['warn','Dues',dueStudents+' students have fee dues of '+inr(out)+' in total.','#/reminders']);
+  if(missStudents)alerts.push(['warn','Documents',missStudents+(missStudents===1?' student has':' students have')+' documents missing.','#/students','docs']);
   try{const pm=addMonth(today().slice(0,7),-1)+'-01',[pl,at,stf]=await Promise.all([q(sb.from('payroll_lines').select('status').eq('month',pm)),q(sb.from('staff_attendance').select('status').eq('work_date',today())),q(sb.from('staff').select('id').eq('status','active'))]);
     if(S.profile.role==='owner'){const sm=await q(sb.from('staff_attendance_months').select('month').eq('month',pm));if(!sm.length)alerts.push(['warn','Attendance',monthLabel(pm.slice(0,7))+' attendance report has not been submitted by the coordinator yet. Salary waits for it.'])}
     const dr=pl.filter(l=>l.status==='draft').length;if(dr)alerts.push(['warn','Salary',monthLabel(pm.slice(0,7))+' salary: '+dr+' staff still unpaid. See Staff > Salary.']);
+    staffIn=at.filter(a=>['present','late','half_day'].includes(a.status)).length;staffTot=stf.length;
     if(stf.length)alerts.push(['neutral','Staff','Today '+at.filter(a=>['present','late','half_day'].includes(a.status)).length+' of '+stf.length+' staff are in school.'])}catch(e){}
   alerts.push([tied?'good':'bad','Books',tied?'Fee ledger and student balances agree.':'Fee ledger differs from student balances by '+inr(ck.difference)+'. Check Accounts.']);
   if(F.fc.length){const lo=F.fc.slice().sort((a,b)=>a.y-b.y)[0];alerts.push(['neutral','Forecast','Lowest expected collection ahead: '+monthLabel(lo.m)+', about '+inr(lo.y)+'.'])}
   el.innerHTML=head('Dashboard','Session '+S.year.label,'<button class="btn ghost" id="bkup">Backup (Excel)</button>')+
-   '<div class="kpis">'+kpi('Students',rows.length,'Enrolled in '+S.year.label)+kpi('Fees due this session',inr(billed),'After discounts, with previous dues')+kpi('Collected',inr(paid),(billed?Math.round(paid/billed*100):0)+'% of fees due')+kpi('Outstanding',inr(out),dueStudents+' students with dues')+'</div>'+
+   '<div class="kpis">'+kpi('Collected today',inr(sum(todayPay.map(p=>num(p.amount)))),todayPay.length+' receipts today','#/accounts',"today")+kpi('Staff in school',staffIn==null?'-':staffIn+' / '+staffTot,'Present, late or half day today','#/staff','today')+kpi('Documents pending',missStudents,'students with something missing','#/students','today')+kpi('Students with dues',dueStudents,inr(out)+' outstanding','#/reminders','today')+'</div>'+
+   '<div class="kpis">'+kpi('Students',rows.length,'Enrolled in '+S.year.label,'#/students')+kpi('Fees due this session',inr(billed),'After discounts, with previous dues','#/fees')+kpi('Collected',inr(paid),(billed?Math.round(paid/billed*100):0)+'% of fees due','#/accounts')+kpi('Outstanding',inr(out),dueStudents+' students with dues','#/reminders')+'</div>'+
    '<div class="grid2"><div class="card"><div class="card-head"><div><h2>Fee collection by month</h2><p class="muted small">Actual collection and the next 6 months.</p></div>'+legendHTML+'</div>'+lineChart(series,F.fc,'Monthly fee collection and forecast')+'<p class="muted small" style="margin-top:6px">'+esc(F.note||'')+'</p></div>'+
-   '<div class="card"><h2 style="margin-bottom:6px">Needs attention</h2><ul class="list">'+alerts.map(a=>'<li><span class="pill '+a[0]+'">'+esc(a[1])+'</span><div>'+esc(a[2])+'</div></li>').join('')+'</ul></div></div>'+
+   '<div class="card"><h2 style="margin-bottom:6px">Needs attention</h2><ul class="list">'+alerts.map(a=>'<li><span class="pill '+a[0]+'">'+esc(a[1])+'</span><div>'+(a[3]?'<a href="'+a[3]+'"'+(a[4]?' data-go="'+a[4]+'"':'')+'>'+esc(a[2])+'</a>':esc(a[2]))+'</div></li>').join('')+'</ul></div></div>'+
+   '<div class="card"><div class="card-head"><div><h2>Class-wise collection</h2><p class="muted small">Click a class to open its students.</p></div></div><div class="tablewrap"><table class="cls-table"><thead><tr><th>Class</th><th class="r">Students</th><th class="r">Fee due</th><th class="r">Collected</th><th class="r">Outstanding</th><th>Collected %</th></tr></thead><tbody>'+clsRows.map(c=>'<tr class="click" data-cls="'+esc(c.n)+'"><td><b>'+esc(c.n)+'</b></td><td class="r">'+c.st+'</td><td class="r">'+inrShort(c.b)+'</td><td class="r">'+inrShort(c.p)+'</td><td class="r">'+inrShort(c.o)+'</td><td class="pc"><div class="pmini '+(c.pc<35?'low':c.pc<70?'mid':'')+'"><i style="width:'+c.pc+'%"></i></div><span class="muted small">'+c.pc+'%</span></td></tr>').join('')+'</tbody></table></div></div>'+
    '<div class="grid2e"><div class="card"><h2 style="margin-bottom:12px">Outstanding fees by class</h2>'+(byClass.length?bars(byClass,inrShort,true):'<p class="muted">No dues.</p>')+'</div>'+
    '<div class="card"><h2 style="margin-bottom:6px">Recent receipts</h2>'+(rec.length?'<ul class="list">'+rec.map(p=>{const r=byEnr[p.enrollment_id];return'<li><span class="pill '+(p.status==='posted'?'good':'neutral')+'">'+esc(p.status==='posted'?'Paid':'Reversed')+'</span><div><b>'+inr(p.amount)+'</b> '+(r?'from <a href="#/student/'+esc(p.enrollment_id)+'">'+esc(r.full_name)+'</a>':'')+'<br><span class="muted small">'+esc(p.receipt_no)+' · '+fmtDate(p.paid_on)+' · '+esc(p.mode)+'</span></div></li>'}).join('')+'</ul>':'<p class="muted">No payments recorded yet.</p>')+'</div></div>';
+  $$('tr[data-cls]').forEach(t=>t.onclick=()=>{stuState.cls=t.dataset.cls;stuState.view='classes';location.hash='#/students'});
+  $$('a[data-go="docs"]').forEach(a=>a.onclick=()=>{stuState.view='docs'});
 }
 
 /* =================================================================
@@ -1478,35 +1496,84 @@ async function acReport(box,B){
 }
 
 /* ---------- Reminders: fee and document messages (WhatsApp links, no API needed) ---------- */
-let remTab='fees',remCls='all',remMin=1;
+let remTab='fees',remCls='all',remMin=1,remGroup=true,remHideSent=false;
 const REM_FEES="Assalamu Alaikum {parent},\nThis is a gentle reminder from Al-Khair Academy that the fee of Rs {due} for {student} (Class {class}) is pending. Please deposit it at your earliest convenience. Thank you.\n- Al-Khair Academy";
 const REM_DOCS="Assalamu Alaikum {parent},\nFrom Al-Khair Academy: the following documents for {student} (Class {class}) are still pending: {docs}. Please submit them at school soon. Thank you.\n- Al-Khair Academy";
 const waLink=(m,text)=>{let d=String(m||'').replace(/\D/g,'').slice(-10);return d.length===10?'https://wa.me/91'+d+'?text='+encodeURIComponent(text):null};
 const fillTpl=(t,o)=>t.replace(/\{(\w+)\}/g,(_,k)=>o[k]!=null?o[k]:'');
+const remKey=m=>String(m||'').replace(/\D/g,'').slice(-10);
+function remSentGet(tab){try{return JSON.parse(localStorage.getItem('remSent_'+tab)||'{}')}catch(e){return{}}}
+function remSentSet(tab,o){try{localStorage.setItem('remSent_'+tab,JSON.stringify(o))}catch(e){}}
 async function vReminders(el){
   const [rows,ids,md]=await Promise.all([summaryRows(),all((a,b)=>sb.from('v_student_id_status').select('*').range(a,b)),all((a,b)=>sb.from('v_student_missing_documents').select('student_id,document_name').range(a,b))]);
   const st=Object.fromEntries(ids.map(r=>[r.student_id,r]));
   let tpl;try{tpl=localStorage.getItem('remTpl_'+remTab)}catch(e){}tpl=tpl||(remTab==='fees'?REM_FEES:REM_DOCS);
   let list;
   if(remTab==='fees'){
-    list=rows.filter(r=>num(r.balance)>=remMin&&(remCls==='all'||r.class_name===remCls)).sort((a,b)=>num(b.balance)-num(a.balance)).map(r=>{const x=st[r.student_id]||{};return{id:r.student_id,name:r.full_name,cls:r.class_name,parent:x.father_name||'Parent',mobile:x.guardian_mobile,amt:num(r.balance),vars:{student:r.full_name,class:r.class_name,parent:x.father_name||'Parent',due:Math.round(num(r.balance)).toLocaleString('en-IN')}}});
+    list=rows.filter(r=>num(r.balance)>=remMin&&(remCls==='all'||r.class_name===remCls)).sort((a,b)=>num(b.balance)-num(a.balance)).map(r=>{const x=st[r.student_id]||{};return{ids:[r.student_id],names:[r.full_name],clss:[r.class_name],parent:x.father_name||'Parent',mobile:x.guardian_mobile,amt:num(r.balance),docs:[]}});
   }else{
     const by={};md.forEach(m=>{(by[m.student_id]=by[m.student_id]||[]).push(m.document_name)});
-    list=ids.filter(r=>remCls==='all'||r.class_name===remCls).map(r=>{const d=(by[r.student_id]||[]).concat(IDS.filter(([k])=>idMiss(r,k)).map(([,n])=>n));return{id:r.student_id,name:r.full_name,cls:r.class_name,parent:r.father_name||'Parent',mobile:r.guardian_mobile,docs:d,vars:{student:r.full_name,class:r.class_name,parent:r.father_name||'Parent',docs:d.join(', ')}}}).filter(x=>x.docs.length).sort((a,b)=>b.docs.length-a.docs.length);
+    list=ids.filter(r=>remCls==='all'||r.class_name===remCls).map(r=>{const d=(by[r.student_id]||[]).concat(IDS.filter(([k])=>idMiss(r,k)).map(([,n])=>n));return{ids:[r.student_id],names:[r.full_name],clss:[r.class_name],parent:r.father_name||'Parent',mobile:r.guardian_mobile,docs:d,amt:0}}).filter(x=>x.docs.length).sort((a,b)=>b.docs.length-a.docs.length);
   }
+  const raw=list.length;
+  list.forEach(x=>{x.mem=[x]});
+  if(remGroup){const g={},out=[];list.forEach(x=>{const k=remKey(x.mobile);if(k.length!==10){out.push(x);return}if(g[k])g[k].mem.push(x);else{g[k]=x;out.push(x)}})
+    out.forEach(x=>{if(x.mem.length>1){const m=x.mem;x.ids=m.map(y=>y.ids[0]);x.names=m.map(y=>y.names[0]);x.clss=m.map(y=>y.clss[0]);x.amt=sum(m.map(y=>y.amt))}});list=out}
+  list.forEach(x=>{const m=x.mem,multi=m.length>1;x.vars={student:x.names.join(' & '),class:multi?[...new Set(x.clss)].join(' / '):x.clss[0],parent:x.parent,due:Math.round(x.amt).toLocaleString('en-IN'),docs:multi?m.map(y=>y.names[0]+': '+y.docs.join(', ')).join('; '):x.docs.join(', ')};x.key=x.ids.slice().sort().join('+');x.name=x.vars.student;x.cls=x.vars.class});
+  const sent=remSentGet(remTab),sd=x=>sent[x.key],sentCount=list.filter(sd).length;
+  const view=remHideSent?list.filter(x=>!sd(x)):list;
   const msg=x=>fillTpl(tpl,x.vars),noNum=list.filter(x=>!waLink(x.mobile,'x')).length;
   el.innerHTML=head('Reminders','Messages are ready. Send each with one click on WhatsApp')+
    '<div class="seg" role="group" style="justify-self:start">'+[['fees','Fees dues'],['docs','Documents']].map(t=>'<button data-t="'+t[0]+'" aria-pressed="'+(remTab===t[0])+'">'+t[1]+'</button>').join('')+'</div>'+
    '<div class="card" style="margin-top:12px"><div class="row2" style="align-items:end">'+sel('rcls','Class',[['all','All classes']].concat(S.classes.map(c=>[c.name,c.name])),remCls)+(remTab==='fees'?inp('rmin','Minimum due (₹)',remMin,'number','min="1" step="100"'):'')+'</div>'+
+   '<div class="chips" style="margin:6px 0 10px"><label class="chk"><input type="checkbox" id="rgrp"'+(remGroup?' checked':'')+'> One message per parent (brothers and sisters together)</label><label class="chk"><input type="checkbox" id="rhs"'+(remHideSent?' checked':'')+'> Hide already sent</label></div>'+
    '<div class="field"><label for="rtpl">Message (you can edit it; {parent} {student} {class} '+(remTab==='fees'?'{due}':'{docs}')+')</label><textarea class="input" id="rtpl" rows="4">'+esc(tpl)+'</textarea></div></div>'+
-   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>'+list.length+' students'+(remTab==='fees'?' · '+inr(sum(list.map(x=>x.amt))):'')+'</h2><button class="btn ghost sm" id="rcsv">Download list</button></div>'+(noNum?'<p class="muted small">'+noNum+' students have no mobile number or an invalid one.</p>':'')+
+   '<div class="card" style="margin-top:12px"><div class="card-head"><h2>'+view.length+' messages'+(remGroup&&raw!==list.length?' <span class="muted small">(for '+raw+' students)</span>':'')+(remTab==='fees'?' · '+inr(sum(view.map(x=>x.amt))):'')+'</h2><div class="chips"><span class="pill '+(sentCount?'good':'neutral')+'">'+sentCount+' of '+list.length+' sent</span><button class="btn ghost sm" id="rclr">Clear sent marks</button><button class="btn ghost sm" id="rcsv">Download list</button></div></div>'+(noNum?'<p class="muted small">'+noNum+' messages have no mobile number or an invalid one.</p>':'')+
    '<div class="tablewrap"><table><thead><tr><th>Name</th><th>Class</th><th>Parent</th>'+(remTab==='fees'?'<th class="r">Due</th>':'<th>Pending documents</th>')+'<th></th></tr></thead><tbody>'+
-   list.map(x=>{const l=waLink(x.mobile,msg(x));return'<tr><td>'+esc(x.name)+'</td><td class="nowrap">'+esc(x.cls)+'</td><td>'+esc(x.parent)+'</td><td'+(remTab==='fees'?' class="r"><b>'+inr(x.amt)+'</b>':'>'+esc(x.docs.join(', ')))+'</td><td class="r nowrap">'+(l?'<a class="btn ghost sm" target="_blank" rel="noopener" href="'+l+'">WhatsApp</a>':'<span class="muted small">no number</span>')+'</td></tr>'}).join('')+'</tbody></table></div></div>';
+   view.map((x,i)=>{const l=waLink(x.mobile,msg(x)),d=sd(x);return'<tr'+(d?' class="sentrow"':'')+'><td>'+esc(x.name)+'</td><td class="nowrap">'+esc(x.cls)+'</td><td>'+esc(x.parent)+'</td><td'+(remTab==='fees'?' class="r"><b>'+inr(x.amt)+'</b>':'>'+esc(x.vars.docs))+'</td><td class="r nowrap">'+(l?(d?'<span class="muted small">Sent '+esc(fmtDate(d))+'</span> ':'')+'<a class="btn ghost sm" data-k="'+esc(x.key)+'" target="_blank" rel="noopener" href="'+l+'">'+(d?'Send again':'WhatsApp')+'</a>':'<span class="muted small">no number</span>')+'</td></tr>'}).join('')+'</tbody></table></div></div>';
   $$('.seg button[data-t]').forEach(b=>b.onclick=()=>{remTab=b.dataset.t;vReminders(el)});
   $('#rcls').onchange=e=>{remCls=e.target.value;vReminders(el)};
+  $('#rgrp').onchange=e=>{remGroup=e.target.checked;vReminders(el)};
+  $('#rhs').onchange=e=>{remHideSent=e.target.checked;vReminders(el)};
   if($('#rmin'))$('#rmin').onchange=e=>{remMin=Math.max(1,Number(e.target.value)||1);vReminders(el)};
   $('#rtpl').onchange=e=>{try{localStorage.setItem('remTpl_'+remTab,e.target.value)}catch(x){}vReminders(el)};
-  $('#rcsv').onclick=()=>csvDownload('reminders-'+remTab+'.csv',[['Name','Class','Parent','Mobile',remTab==='fees'?'Due':'Missing','Message']].concat(list.map(x=>[x.name,x.cls,x.parent,x.mobile||'',remTab==='fees'?x.amt:x.docs.join('; '),msg(x)])));
+  $$('a[data-k]').forEach(a=>a.addEventListener('click',()=>{const o=remSentGet(remTab);o[a.dataset.k]=today();remSentSet(remTab,o);const tr=a.closest('tr');if(tr)tr.classList.add('sentrow');a.textContent='Send again'}));
+  $('#rclr').onclick=()=>{remSentSet(remTab,{});vReminders(el)};
+  $('#rcsv').onclick=()=>csvDownload('reminders-'+remTab+'.csv',[['Name','Class','Parent','Mobile',remTab==='fees'?'Due':'Missing','Message']].concat(view.map(x=>[x.name,x.cls,x.parent,x.mobile||'',remTab==='fees'?x.amt:x.vars.docs,msg(x)])));
+}
+
+/* ---------- Reports: build any class / fee / document list, print or download ---------- */
+const RP_COLS=[['adm','Adm. no'],['name','Student'],['cls','Class'],['father','Father'],['mobile','Mobile'],['fee','Fee (gross)'],['disc','Discount'],['paid','Paid'],['bal','Balance'],['docs','Missing documents']];
+let rpF={cls:'all',fee:'all',doc:'all',q:''},rpCols=null;
+async function vReports(el){
+  if(!rpCols){try{rpCols=JSON.parse(localStorage.getItem('rpCols')||'null')}catch(e){}rpCols=rpCols||['adm','name','cls','father','mobile','bal','docs']}
+  const [rows,ids,md,sm]=await Promise.all([summaryRows(),all((a,b)=>sb.from('v_student_id_status').select('*').range(a,b)),all((a,b)=>sb.from('v_student_missing_documents').select('student_id,document_name').range(a,b)),all((a,b)=>sb.from('students').select('id,father_name,guardian_mobile').range(a,b))]);
+  const st=Object.fromEntries(ids.map(r=>[r.student_id,r])),sb_=Object.fromEntries(sm.map(r=>[r.id,r])),mdBy={};md.forEach(m=>{(mdBy[m.student_id]=mdBy[m.student_id]||[]).push(m.document_name)});
+  const all_=rows.map(r=>{const i=st[r.student_id]||{},x=sb_[r.student_id]||{},miss=(mdBy[r.student_id]||[]).concat(IDS.filter(([k])=>idMiss(i,k)).map(([,n])=>n));
+    return{adm:r.admission_no,name:r.full_name,cls:r.class_name,father:x.father_name||'',mobile:x.guardian_mobile||'',fee:num(r.gross_fee)-0,disc:num(r.discount),paid:num(r.paid),bal:num(r.balance),miss,docs:miss.join(', '),net:num(r.gross_fee)-num(r.discount)+num(r.previous_dues)}});
+  const f=rpF,qq=f.q.trim().toLowerCase();
+  const out=all_.filter(r=>(f.cls==='all'||r.cls===f.cls)&&(f.fee==='all'||(f.fee==='dues'&&r.bal>0)||(f.fee==='cleared'&&r.bal<=0&&r.fee>0)||(f.fee==='nofee'&&r.fee===0))&&
+    (f.doc==='all'||(f.doc==='any'&&r.miss.length)||(f.doc==='none'&&!r.miss.length)||(!['all','any','none'].includes(f.doc)&&r.miss.includes(f.doc)))&&
+    (!qq||(r.name+' '+r.father+' '+r.adm+' '+r.mobile).toLowerCase().includes(qq)));
+  out.sort((a,b)=>(S.classes.findIndex(c=>c.name===a.cls)-S.classes.findIndex(c=>c.name===b.cls))||String(a.name).localeCompare(String(b.name)));
+  const cols=RP_COLS.filter(c=>rpCols.includes(c[0])),val=(r,k)=>['fee','disc','paid','bal'].includes(k)?r[k]:r[k];
+  const total=k=>sum(out.map(r=>r[k]));
+  const cell=(r,k)=>['fee','disc','paid','bal'].includes(k)?inr(r[k]):esc(r[k]);
+  const title='Al-Khair Academy: '+(f.cls==='all'?'All classes':f.cls)+(f.fee!=='all'?' · '+({dues:'Fee dues',cleared:'Fees cleared',nofee:'No fee set'})[f.fee]:'')+(f.doc!=='all'?' · '+({any:'Any document missing',none:'Documents complete'}[f.doc]||(f.doc+' missing')):'');
+  el.innerHTML=head('Reports','Pick filters and columns, then print or download')+
+   '<div class="card"><div class="row2" style="align-items:end">'+sel('rpc','Class',[['all','All classes']].concat(S.classes.map(c=>[c.name,c.name])),f.cls)+sel('rpf','Fees',[['all','All'],['dues','With dues'],['cleared','Fully paid'],['nofee','No fee set']],f.fee)+sel('rpd','Documents',[['all','All'],['any','Any missing'],['none','Nothing missing']].concat(IDS.map(i=>[i[1],i[1]+' missing'])),f.doc)+inp('rpq','Search name, father, adm. no or mobile',f.q)+'</div>'+
+   '<div class="chips" style="margin-top:10px">'+RP_COLS.map(c=>'<label class="chk"><input type="checkbox" data-col="'+c[0]+'"'+(rpCols.includes(c[0])?' checked':'')+'> '+esc(c[1])+'</label>').join('')+'</div></div>'+
+   '<div class="card"><div class="card-head"><h2>'+out.length+' students'+(rpCols.includes('bal')?' · balance '+inr(total('bal')):'')+'</h2><div class="chips"><button class="btn ghost sm" id="rpx">Excel</button><button class="btn ghost sm" id="rpcsv">CSV</button><button class="btn sm" id="rpp">Print</button></div></div>'+
+   (out.length?'<div class="tablewrap"><table><thead><tr><th>#</th>'+cols.map(c=>'<th'+(['fee','disc','paid','bal'].includes(c[0])?' class="r"':'')+'>'+esc(c[1])+'</th>').join('')+'</tr></thead><tbody>'+out.map((r,i)=>'<tr><td class="muted">'+(i+1)+'</td>'+cols.map(c=>'<td'+(['fee','disc','paid','bal'].includes(c[0])?' class="r"':'')+'>'+cell(r,c[0])+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>':'<p class="muted">No students match these filters.</p>')+'</div>';
+  const rerender=()=>vReports(el);
+  $('#rpc').onchange=e=>{rpF.cls=e.target.value;rerender()};$('#rpf').onchange=e=>{rpF.fee=e.target.value;rerender()};$('#rpd').onchange=e=>{rpF.doc=e.target.value;rerender()};
+  $('#rpq').onchange=e=>{rpF.q=e.target.value;rerender()};
+  $$('input[data-col]').forEach(c=>c.onchange=()=>{rpCols=RP_COLS.map(x=>x[0]).filter(k=>{const b=document.querySelector('input[data-col="'+k+'"]');return b&&b.checked});try{localStorage.setItem('rpCols',JSON.stringify(rpCols))}catch(e){}rerender()});
+  const matrix=()=>[['#'].concat(cols.map(c=>c[1]))].concat(out.map((r,i)=>[i+1].concat(cols.map(c=>['fee','disc','paid','bal'].includes(c[0])?r[c[0]]:r[c[0]]))));
+  $('#rpcsv').onclick=()=>csvDownload('AlKhair_report_'+today()+'.csv',matrix());
+  $('#rpx').onclick=()=>{const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(matrix()),'Report');XLSX.writeFile(wb,'AlKhair_report_'+today()+'.xlsx')};
+  $('#rpp').onclick=()=>{const w=window.open('','_blank');if(!w){toast('Allow pop-ups to print',true);return}
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>body{font:12px Arial,sans-serif;margin:18px;color:#111}h1{font-size:16px;margin:0 0 2px}p{margin:0 0 10px;color:#555}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:4px 6px;text-align:left}th{background:#eee}td.r,th.r{text-align:right}tr{page-break-inside:avoid}</style></head><body><h1>'+esc(title)+'</h1><p>'+out.length+' students · '+esc(S.year.label)+' · printed '+esc(fmtDate(today()))+'</p><table><thead><tr><th>#</th>'+cols.map(c=>'<th'+(['fee','disc','paid','bal'].includes(c[0])?' class="r"':'')+'>'+esc(c[1])+'</th>').join('')+'</tr></thead><tbody>'+out.map((r,i)=>'<tr><td>'+(i+1)+'</td>'+cols.map(c=>'<td'+(['fee','disc','paid','bal'].includes(c[0])?' class="r"':'')+'>'+cell(r,c[0])+'</td>').join('')+'</tr>').join('')+'</tbody></table><script>window.onload=function(){window.print()}<\/script></body></html>');w.document.close()};
 }
 
 /* ---------- Academics: exams, marks entry, results, subject setup ---------- */
