@@ -79,3 +79,6 @@ Students > Portal export checks every student against portal rules (PEN 11 digit
 * **Dashboard:** a "today" row (collected today, staff in school, documents pending, students with dues) and the usual totals; every card opens the matching screen. New Class-wise collection table (fee due, collected, outstanding, % collected); click a class to open its students.
 * **Reminders:** one message per parent (brothers and sisters with the same mobile are combined into one message), "Sent" marks per message (kept in this browser, with Hide sent and Clear sent marks), Send again.
 * **Reports** (owner and Accounts): choose class, fee status (dues, fully paid, no fee), document status (any missing or PEN, APAAR, Aadhaar, Samagra missing), search, and the columns; then Print, Excel or CSV. Read-only, no database change.
+
+## Last session pending (14 Nov 2026)
+A highlighted (amber) **Last session pending** column shows each student's unpaid 2025-26 fees (carried as previous dues): Students > class lists, Fees > Dues and collection (also in the CSV), and Reports (column and filter). Students has a "Last session pending" filter, Fees has a total card, and the Dashboard has a card that opens the filtered list. Students who are not enrolled this session stay in the separate Old dues section.
