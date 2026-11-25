@@ -340,8 +340,8 @@ function lineChart(hist,fc,label,second){
   hist.forEach((p,i)=>{s+='<circle class="ch-dot" cx="'+X(i)+'" cy="'+Y(p.y)+'" r="'+(i===hl?5:2.2)+'" '+(i===hl?'':'style="fill:var(--c-hist)"')+'><title>'+monthLabel(p.m)+': '+esc(inr(p.y))+'</title></circle>'});
   return s+'</svg>';
 }
-function bars(items,fmt,gold){
-  const mx=Math.max.apply(null,items.map(i=>i.v).concat([1]));
+function bars(items,fmt,gold,fixedMax){
+  const mx=fixedMax||Math.max.apply(null,items.map(i=>i.v).concat([1]));
   return'<div class="bars">'+items.map(i=>'<div class="bar"><span>'+esc(i.l)+'</span><div class="track"><div class="fill'+(gold?' gold':'')+'" style="width:'+Math.max(1.5,i.v/mx*100)+'%"></div></div><span class="val">'+esc(fmt?fmt(i.v):i.v)+'</span></div>').join('')+'</div>';
 }
 const legendHTML='<div class="legend"><span><i></i>Actual</span><span><i class="fc"></i>Forecast</span><span><i class="band"></i>80% range</span></div>';
@@ -933,9 +933,33 @@ async function yearsSection(){
    '<tr class="total"><td>Total</td><td class="r">'+inr(tf)+'</td><td class="r">'+inr(te)+'</td><td class="r">'+inr(tf-te)+'</td><td></td><td class="r">'+(tf?(te/tf*100).toFixed(1)+'%':'-')+'</td></tr></tbody></table></div>'+
    '<ul class="list" style="margin-top:10px">'+notes.map(t=>'<li><div>'+esc(t)+'</div></li>').join('')+'</ul></div>';
 }
+async function behaviourSection(){
+  let sn=[];try{sn=await all((a,b)=>sb.from('fee_register_snapshots').select('*').order('snap_no').range(a,b))}catch(e){sn=[]}
+  if(!sn.length)return'';
+  const cur=await summaryRows();
+  const live={label:'ERP today',net:sum(cur.map(r=>num(r.gross_fee)-num(r.discount))),paid:sum(cur.map(r=>num(r.paid))),sp:cur.filter(r=>num(r.paid)>0).length,n:cur.length};
+  const P=sn.map(r=>({label:r.label.replace('Fee register ','Register '),net:num(r.net_fee),paid:num(r.paid),sp:r.students_paid,n:r.students}));
+  P.push(live);
+  const pc=r=>r.net?r.paid/r.net*100:0;
+  const last=sn[sn.length-1],inst=last.installments||{};
+  const rows=P.map((r,i)=>'<tr><td>'+esc(r.label)+'</td><td class="r">'+inr(r.paid)+'</td><td class="r">'+pc(r).toFixed(1)+'%</td><td class="r">'+r.sp+' of '+r.n+'</td><td class="r">'+(i?(r.paid-P[i-1].paid>=0?'+':'')+inr(r.paid-P[i-1].paid):'-')+'</td></tr>').join('');
+  const gains=P.slice(1,sn.length).map((r,i)=>r.paid-P[i].paid);
+  const notes=[];
+  notes.push('Collection moved from '+inr(P[0].paid)+' ('+pc(P[0]).toFixed(1)+'% of net fees) to '+inr(P[sn.length-1].paid)+' ('+pc(P[sn.length-1]).toFixed(1)+'%) across the fee register updates.');
+  if(gains.length>1)notes.push('Each update added less than the one before: '+gains.map(inr).join(', then ')+'. Collection is slowing, so reminders and calls matter now.');
+  const ik=Object.keys(inst);
+  if(ik.length){const t=sum(ik.map(k=>num(inst[k].amount)));notes.push('Instalment I brought in '+(t?Math.round(num((inst.I||{}).amount)/t*100):0)+'% of everything collected. Only '+num((inst.II||{}).students)+' of '+num((inst.I||{}).students)+' families who paid instalment I have paid a second one, and '+num((inst.III||{}).students)+' have paid a third.')}
+  const byC=S.classes.map(c=>{const R=cur.filter(r=>r.class_name===c.name),net=sum(R.map(r=>num(r.gross_fee)-num(r.discount))),pd=sum(R.map(r=>num(r.paid)));return{l:c.name,v:net?pd/net*100:0,n:R.length}}).filter(r=>r.n);
+  return '<div class="card"><div class="card-head"><div><h2>How this session’s fees are coming in</h2><p class="muted small">Collection at each fee register update, then the live ERP figure. The registers carry no dates, so they are shown in the order they were received.</p></div></div>'+
+   '<div class="grid2e"><div><h3 style="margin-bottom:8px">Collected as % of net fees</h3>'+bars(P.map(r=>({l:r.label,v:+pc(r).toFixed(1)})),v=>v.toFixed(1)+'%',true,100)+'</div>'+
+   (ik.length?'<div><h3 style="margin-bottom:8px">Collected by instalment (latest register)</h3>'+bars(ik.map(k=>({l:'Instalment '+k+' ('+num(inst[k].students)+(num(inst[k].students)===1?' family)':' families)'),v:num(inst[k].amount)})),inrShort,false)+'</div>':'')+'</div>'+
+   '<div class="tablewrap" style="margin-top:14px"><table><thead><tr><th></th><th class="r">Collected</th><th class="r">% of net fees</th><th class="r">Families who have paid</th><th class="r">Added since previous</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+   '<h3 style="margin:16px 0 8px">Collected % by class (live)</h3>'+bars(byC.map(r=>({l:r.l,v:+r.v.toFixed(1)})),v=>v.toFixed(1)+'%',true,100)+
+   '<ul class="list" style="margin-top:10px">'+notes.map(t=>'<li><div>'+esc(t)+'</div></li>').join('')+'</ul></div>';
+}
 async function vTrends(el){
   const [mon,ie]=await Promise.all([all((a,b)=>sb.from('v_fee_collection_monthly').select('*').order('month').range(a,b)),all((a,b)=>sb.from('v_monthly_income_expense').select('*').order('month').range(a,b))]);
-  const yoy=(await yoySection())+(await yearsSection());
+  const yoy=(await behaviourSection())+(await yoySection())+(await yearsSection());
   const series=monthlySeries(mon);
   if(series.length<2&&!ie.length){el.innerHTML=head('Trends','')+yoy+'<div class="card empty">Trends need history. Import your earlier years’ monthly fee collection in Import, and record expenses in Accounts.</div>';return}
   const F=makeForecast(series,trendH,{seasonal:true}),fc=F.fc;
